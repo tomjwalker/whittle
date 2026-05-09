@@ -37,6 +37,9 @@ uv run ruff check
 # Generate the legacy split-surface V0 case
 uv run whittle write-case --preset legacy-box --output outputs/legacy_box_v0
 
+# Generate a short smoke-run case for OpenFOAM shakedown
+uv run whittle write-case --preset legacy-box --output outputs/legacy_box_smoke --max-iterations 50 --write-interval 10
+
 # Generate a single-STL V0 case from the local ignored hexacopter asset
 uv run whittle write-case --geometry cad/drone_model_hex.stl --geometry-mode single-stl --output outputs/hex_v0 --velocity 10
 ```
@@ -60,6 +63,24 @@ which snappyHexMesh
 
 V0 writes case files only. Solver execution is intentionally a later explicit
 step.
+
+## Manual OpenFOAM Run With Logs
+
+For long solver runs, write logs inside the WSL case directory rather than
+copying terminal output back into chat:
+
+```bash
+cd ~/OpenFOAM/cases/legacy_box_v0
+mkdir -p run_logs
+
+blockMesh 2>&1 | tee run_logs/blockMesh_$(date +%Y%m%d_%H%M%S).log
+snappyHexMesh -overwrite 2>&1 | tee run_logs/snappyHexMesh_$(date +%Y%m%d_%H%M%S).log
+checkMesh 2>&1 | tee run_logs/checkMesh_$(date +%Y%m%d_%H%M%S).log
+simpleFoam 2>&1 | tee run_logs/simpleFoam_$(date +%Y%m%d_%H%M%S).log
+```
+
+Later Whittle should gain a typed log parser for `checkMesh` and solver status.
+Until then, keep large logs local and ignored.
 
 ## Update Rule
 

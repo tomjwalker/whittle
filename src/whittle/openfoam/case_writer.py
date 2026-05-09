@@ -360,7 +360,7 @@ def _block_mesh_dict(spec: SimulationCaseSpec) -> str:
 
     return (
         _header("dictionary", "blockMeshDict")
-        + "convertToMeters 1.0;\n\n"
+        + "scale 1.0;\n\n"
         + "vertices\n(\n"
         + f"    ({x_min:g} {y_min:g} {z_min:g})\n"
         + f"    ({x_max:g} {y_min:g} {z_min:g})\n"

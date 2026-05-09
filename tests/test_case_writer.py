@@ -3,6 +3,7 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
+from whittle.cli import main
 from whittle.openfoam.case_writer import write_openfoam_case
 from whittle.tools.case_tools import build_case_spec
 from whittle.tools.geometry_presets import build_single_stl_geometry
@@ -86,6 +87,35 @@ def test_report_includes_trace_events_assumptions_and_warnings(tmp_path: Path) -
     assert report.validation_checks
 
 
+def test_cli_accepts_smoke_run_iteration_controls(tmp_path: Path) -> None:
+    geometry_file = tmp_path / "drone.stl"
+    _write_binary_stl(geometry_file)
+    output_dir = tmp_path / "smoke_case"
+
+    exit_code = main(
+        [
+            "write-case",
+            "--geometry",
+            str(geometry_file),
+            "--output",
+            str(output_dir),
+            "--max-iterations",
+            "20",
+            "--write-interval",
+            "5",
+        ]
+    )
+
+    control_dict = (output_dir / "system/controlDict").read_text(encoding="utf-8")
+    block_mesh = (output_dir / "system/blockMeshDict").read_text(encoding="utf-8")
+
+    assert exit_code == 0
+    assert "endTime         20;" in control_dict
+    assert "writeInterval   5;" in control_dict
+    assert "scale 1.0;" in block_mesh
+    assert "convertToMeters" not in block_mesh
+
+
 def _write_binary_stl(path: Path) -> None:
     header = b"test binary stl".ljust(80, b" ")
     triangle_count = struct.pack("<I", 1)
@@ -106,4 +136,3 @@ def _write_binary_stl(path: Path) -> None:
         0,
     )
     path.write_bytes(header + triangle_count + triangle)
-

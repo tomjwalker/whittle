@@ -51,6 +51,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     write_case.add_argument("--velocity", type=float, help="Reference inlet velocity in m/s.")
     write_case.add_argument(
+        "--max-iterations",
+        type=int,
+        default=500,
+        help="simpleFoam endTime iteration count. Use a small value for smoke runs.",
+    )
+    write_case.add_argument(
+        "--write-interval",
+        type=int,
+        default=100,
+        help="OpenFOAM writeInterval in solver iterations.",
+    )
+    write_case.add_argument(
         "--case-name",
         help="OpenFOAM case name. Defaults to output directory name.",
     )
@@ -59,6 +71,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _write_case(args: argparse.Namespace):
     case_name = args.case_name or args.output.name
+    if args.max_iterations <= 0:
+        raise SystemExit("--max-iterations must be greater than zero.")
+    if args.write_interval <= 0:
+        raise SystemExit("--write-interval must be greater than zero.")
 
     if args.preset == "legacy-box":
         geometry = build_legacy_box_geometry()
@@ -73,8 +89,8 @@ def _write_case(args: argparse.Namespace):
         case_name=case_name,
         geometry=geometry,
         velocity_mps=velocity,
-        max_iterations=500,
-        write_interval=100,
+        max_iterations=args.max_iterations,
+        write_interval=args.write_interval,
     )
     return write_openfoam_case(spec, args.output)
 

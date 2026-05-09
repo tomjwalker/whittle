@@ -21,6 +21,7 @@ geometry, but may need a future mesh-prep pass.
 
 ```bash
 uv run whittle write-case --preset legacy-box --output outputs/legacy_box_v0
+uv run whittle write-case --preset legacy-box --output outputs/legacy_box_smoke --max-iterations 50 --write-interval 10
 uv run whittle write-case --geometry cad/drone_model_hex.stl --geometry-mode single-stl --output outputs/hex_v0 --velocity 10
 ```
 
@@ -78,3 +79,22 @@ The report should use visible trace events such as:
 - `HumanReviewNeeded`
 
 These are engineering trace events, not hidden model reasoning.
+
+## First OpenFOAM Shakedown
+
+Observed on 2026-05-09 in WSL with OpenFOAM v2012:
+
+- `blockMesh` completed.
+- `snappyHexMesh -overwrite` completed on the legacy split-surface case.
+- The mesh reached about 1.84M cells after snapping.
+- `snappyHexMesh` emitted snap-quality warnings and finished with one illegal
+  face.
+- `checkMesh` reported one failed check: 17 highly skew faces, max skewness
+  about 8.43.
+- `simpleFoam` started and ran for multiple iterations with no MRF or finite
+  volume options present, as intended for V0.
+
+Interpretation: V0 succeeded as a generated-case smoke path. It is not yet a
+validated CFD-quality mesh pipeline. Future work should parse `checkMesh` and
+solver logs into typed validation results instead of relying on copied terminal
+output.
