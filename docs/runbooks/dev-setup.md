@@ -1,50 +1,66 @@
 # Development Setup
 
-Update this file as soon as the real stack and commands are known.
+_Last updated: 2026-05-09_
 
 ## Prerequisites
 
 - Python 3.11+
 - `uv`
-- Node.js 20+
+- OpenFOAM v2012 in WSL for later solver runs
+- ParaView 5.13.2 for later post-processing
+
+Observed local paths:
+
+```text
+OpenFOAM: \\wsl$\Ubuntu-22.04\opt\OpenFOAM\OpenFOAM-v2012
+OpenFOAM cases: \\wsl$\Ubuntu-22.04\home\tjwalker\OpenFOAM\cases
+ParaView: C:\Program Files\ParaView 5.13.2\bin\paraview.exe
+```
 
 ## Environment Files
 
-- Frontend: `.env.local`
-- Backend: `backend/.env`
-- Examples: `.env.local.example`, `backend/.env.example`
+- `.env` and `.env.*` are ignored, except committed examples.
+- Never commit secrets or raw environment contents.
 
-Never commit secrets.
-
-## Default Commands
+## Python Commands
 
 ```bash
-# Python dependencies
-uv sync
+# Install dependencies
+uv sync --extra dev
 
-# Python lint
-uv run ruff check
-
-# Python tests
+# Run tests
 uv run pytest
 
-# Frontend dependencies
-npm install
+# Lint
+uv run ruff check
 
-# Frontend dev server
-npm run dev
+# Generate the legacy split-surface V0 case
+uv run whittle write-case --preset legacy-box --output outputs/legacy_box_v0
 
-# Frontend lint
-npm run lint
+# Generate a single-STL V0 case from the local ignored hexacopter asset
+uv run whittle write-case --geometry cad/drone_model_hex.stl --geometry-mode single-stl --output outputs/hex_v0 --velocity 10
 ```
 
-## Deployment Defaults
+## OpenFOAM Activation
 
-- Frontend: Vercel
-- Backend: Railway
-- Database: Postgres or Supabase-hosted Postgres
-- Monitoring: Sentry
+From PowerShell:
+
+```powershell
+wsl -d Ubuntu-22.04
+```
+
+Inside Ubuntu:
+
+```bash
+source /opt/OpenFOAM/OpenFOAM-v2012/etc/bashrc
+which simpleFoam
+which blockMesh
+which snappyHexMesh
+```
+
+V0 writes case files only. Solver execution is intentionally a later explicit
+step.
 
 ## Update Rule
 
-Keep this file grounded in the real repo. If a command changes, update this file in the same change.
+If the real command changes, update this file in the same change.

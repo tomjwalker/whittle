@@ -30,6 +30,14 @@ Thumbs.db
 tmp/
 .tmp/
 
+# Generated cases and reports
+outputs/*
+!outputs/.gitkeep
+
+# Large local CAD / mesh assets
+CAD/
+cad/
+
 # Coverage and logs
 .coverage
 coverage/

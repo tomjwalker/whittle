@@ -1,0 +1,4 @@
+Set up a steady incompressible OpenFOAM case for external flow over a small
+quadcopter-style drone at 10 m/s, zero pitch, roll and yaw. Ignore propeller
+rotation for now.
+
