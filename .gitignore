@@ -1,0 +1,36 @@
+# Node
+node_modules/
+.next/
+dist/
+build/
+
+# Python
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+
+# Environment
+.env
+.env.*
+!.env.example
+!.env.local.example
+!backend/.env.example
+
+# Editors
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local temp
+tmp/
+.tmp/
+
+# Coverage and logs
+.coverage
+coverage/
+*.log
