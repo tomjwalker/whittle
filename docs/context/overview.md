@@ -34,6 +34,8 @@ validation / evals -> human review -> product loop.
 | Solver | OpenFOAM v2012 in WSL | Execution is later than V0 case writing |
 | Post-pro | ParaView 5.13.2 | Existing Windows install found |
 
+For the current Pydantic model map, see `docs/context/schema-guide.md`.
+
 ## Constraints
 
 - Keep the architecture small and legible.
