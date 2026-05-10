@@ -18,7 +18,7 @@ validation / evals -> human review -> product loop.
 
 - Primary user: Tom, as an AI engineer with CFD/F1 aerodynamics background
 - Current phase: V0.2 deterministic MRF and attitude-transform foundation,
-  plus first V1 deterministic planning scaffold
+  plus V1/V2 planning-agent scaffold
 - Primary workflow: generate an inspectable OpenFOAM case skeleton for external
   drone aerodynamics from typed Pydantic models
 
@@ -30,9 +30,9 @@ validation / evals -> human review -> product loop.
 | Case writing | pathlib + deterministic templates | OpenFOAM file-generation first |
 | Geometry | STL metadata reader, NumPy transforms | Current hex STL remains local/ignored |
 | Planning layer | Deterministic heuristics first | `plan-request` rehearses the agent contract |
-| Agent layer | PydanticAI | Added after deterministic planner/evals work |
+| Agent layer | PydanticAI | First planning agent scaffold added |
 | Evals | pytest first, Pydantic Evals later | Start simple and deterministic |
-| UI | Streamlit optional | Only after CLI/core/evals work |
+| UI | Next.js | Local chat/spec console scaffold added |
 | Solver | OpenFOAM v2012 in WSL | Execution is later than V0 case writing |
 | Post-pro | ParaView 5.13.2 | Existing Windows install found |
 
@@ -60,10 +60,11 @@ For the supported CFD scenario envelope, see `docs/context/physics-envelope.md`.
 ## Near-Term Priorities
 
 1. Smoke-test the combined-attitude MRF case in WSL.
-2. Add deterministic evals around `plan-request`.
-3. Add PydanticAI orchestration after the planning/eval contract is stable.
-4. Add a lightweight chat UI once there is a useful planning/agent object to
-   display.
+2. Exercise the new deterministic evals and PydanticAI agent with real API
+   credentials.
+3. Use the local Next.js UI to iterate on the scenario-honing workflow.
+4. Decide whether the next physics step is differential rotor speeds or solver
+   log parsing.
 
 ## Open Questions
 

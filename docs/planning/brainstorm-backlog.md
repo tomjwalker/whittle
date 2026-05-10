@@ -14,13 +14,10 @@ Use this file for rough but reusable thinking.
 - Build the front-of-workflow agent as a scenario-honing assistant: it asks the
   user whether the drone case is cruise, hover, climb, descent, gust response,
   or a simple geometry smoke test before generating a case spec.
-- Build a small chat UI around `ScenarioPlan`: left side conversation, right
-  side extracted fields, missing information, assumptions, physics-envelope
-  checks, generated files, and visible trace events.
-- Let the future PydanticAI agent mediate between layperson language and the
-  deterministic planner/writer: ask clarifying questions, choose defaults from
-  the physics envelope, and call typed tools only once the request is
-  sufficiently specified.
+- Improve the first Next.js chat UI with saved conversations, richer trace
+  timelines, and a diff view when the user revises a case spec.
+- Let the planning agent accept multi-turn history and carry forward the
+  previously reviewed `ScenarioPlan` instead of replanning from one prompt.
 
 ## Hypotheses
 
@@ -41,9 +38,8 @@ Use this file for rough but reusable thinking.
 - Parse a saved `checkMesh` log into a typed report: pass/fail count, max
   skewness, non-orthogonality, cell count, warning list, and recommended next
   action.
-- Add a deterministic eval set for `plan-request`: cruise, missing speed,
-  vague aerodynamic request, internal duct, hover/takeoff, pitch/yaw/roll, and
-  out-of-envelope speed.
+- Add Pydantic Evals alongside the custom JSON fixture harness once the
+  deterministic cases stop changing daily.
 
 ## Promotion Rule
 

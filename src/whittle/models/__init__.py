@@ -1,5 +1,6 @@
 """Typed domain models for Whittle."""
 
+from whittle.models.agent import PlanningAgentResponse
 from whittle.models.case_spec import BoundaryConditionPlan, SimulationCaseSpec
 from whittle.models.geometry import DroneGeometrySpec, GeometrySurfaceSpec, StlMetadata
 from whittle.models.openfoam import OpenFOAMCaseFiles
@@ -15,6 +16,7 @@ __all__ = [
     "MRFZoneSpec",
     "OpenFOAMCaseFiles",
     "PhysicsEnvelope",
+    "PlanningAgentResponse",
     "RotorAssemblySpec",
     "ScenarioPlan",
     "SimulationCaseSpec",

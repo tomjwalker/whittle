@@ -8,6 +8,7 @@ _Last updated: 2026-05-10_
 - `uv`
 - OpenFOAM v2012 in WSL for later solver runs
 - ParaView 5.13.2 for later post-processing
+- Node.js 20+ for the optional Next.js UI
 
 Observed local paths:
 
@@ -21,6 +22,20 @@ ParaView: C:\Program Files\ParaView 5.13.2\bin\paraview.exe
 
 - `.env` and `.env.*` are ignored, except committed examples.
 - Never commit secrets or raw environment contents.
+- Backend agent settings live in `backend/.env.example`.
+- Frontend settings live in `frontend/.env.local.example`.
+
+For the model-backed planning agent:
+
+```bash
+OPENAI_API_KEY=sk-...
+WHITTLE_AGENT_MODEL=openai-responses:gpt-5.4-mini
+WHITTLE_AGENT_THINKING=medium
+```
+
+The default model is `openai-responses:gpt-5.4-mini`, chosen as the current
+lower-cost OpenAI mini reasoning-capable option for shake-down. Use
+`openai-responses:gpt-5.5` for the more expensive flagship path when needed.
 
 ## Python Commands
 
@@ -52,9 +67,51 @@ uv run whittle write-attitude-suite --output-root outputs --velocity 5 --mrf-ome
 # Deterministically plan a rough user request before writing a case
 uv run whittle plan-request "Set up external cruise over a quadcopter at 10 m/s with spinning propellers."
 
+# Run deterministic planner eval fixtures
+uv run whittle eval-planner
+
+# Run the planning agent. Without OPENAI_API_KEY this uses deterministic fallback.
+uv run whittle agent-plan "Set up cruise at 5 m/s with spinning propellers." --case-name agent_demo
+
+# Force deterministic fallback for cheap UI/API testing
+uv run whittle agent-plan "Set up cruise at 5 m/s with spinning propellers." --deterministic
+
 # Generate a single-STL V0 case from the local ignored hexacopter asset
 uv run whittle write-case --geometry cad/drone_model_hex.stl --geometry-mode single-stl --output outputs/hex_v0 --velocity 10
 ```
+
+## Local Agent API
+
+Start the FastAPI backend:
+
+```bash
+uv run uvicorn whittle.api.app:app --reload --port 8000
+```
+
+Useful endpoints:
+
+```text
+GET  http://localhost:8000/health
+POST http://localhost:8000/api/plan
+POST http://localhost:8000/api/plan/stream
+POST http://localhost:8000/api/write-case
+```
+
+`/api/plan/stream` emits newline-delimited JSON events for the UI.
+
+## Local Next.js UI
+
+The UI is under `frontend/`.
+
+```bash
+cd frontend
+copy .env.local.example .env.local
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`. The UI talks to
+`NEXT_PUBLIC_WHITTLE_API_URL`, defaulting to `http://localhost:8000`.
 
 ## OpenFOAM Activation
 

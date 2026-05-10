@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from pathlib import Path
 
+from whittle.agents.cfd_planning_agent import run_planning_agent
+from whittle.evals.planning import run_planning_evals_from_file
 from whittle.openfoam.case_writer import write_openfoam_case
 from whittle.tools.attitude_suite import write_attitude_smoke_suite
 from whittle.tools.case_tools import build_case_spec
@@ -28,6 +31,14 @@ def main(argv: list[str] | None = None) -> int:
         plan = plan_case_request(args.request, case_name=args.case_name)
         print(plan.model_dump_json(indent=2))
         return 0 if not plan.missing_information else 1
+    if args.command == "agent-plan":
+        response = asyncio.run(_agent_plan(args))
+        print(response.model_dump_json(indent=2))
+        return 0 if response.status not in {"error", "out_of_scope"} else 1
+    if args.command == "eval-planner":
+        result = run_planning_evals_from_file(args.cases)
+        print(result.model_dump_json(indent=2))
+        return 0 if result.passed else 1
 
     parser.print_help()
     return 1
@@ -121,6 +132,42 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     plan_request.add_argument("request", help="Natural-language CFD setup request.")
     plan_request.add_argument("--case-name", default="planned_case")
+
+    agent_plan = subparsers.add_parser(
+        "agent-plan",
+        help="Run the PydanticAI planning agent, with deterministic fallback if no API key is set.",
+    )
+    agent_plan.add_argument("request", help="Natural-language CFD setup request.")
+    agent_plan.add_argument("--case-name", default="agent_planned_case")
+    agent_plan.add_argument(
+        "--model",
+        default=None,
+        help=(
+            "PydanticAI model string. Defaults to WHITTLE_AGENT_MODEL or "
+            "openai-responses:gpt-5.4-mini."
+        ),
+    )
+    agent_plan.add_argument(
+        "--thinking",
+        default=None,
+        help="Reasoning effort, e.g. low, medium, high, xhigh.",
+    )
+    agent_plan.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Skip the model call and use deterministic planning.",
+    )
+
+    eval_planner = subparsers.add_parser(
+        "eval-planner",
+        help="Run deterministic planner fixtures.",
+    )
+    eval_planner.add_argument(
+        "--cases",
+        type=Path,
+        default=Path("examples/planning_eval_cases.json"),
+        help="JSON fixture file.",
+    )
     return parser
 
 
@@ -180,6 +227,16 @@ def _write_attitude_suite(args: argparse.Namespace):
         mrf_omega_rad_s=args.mrf_omega_rad_s,
         max_iterations=args.max_iterations,
         write_interval=args.write_interval,
+    )
+
+
+async def _agent_plan(args: argparse.Namespace):
+    return await run_planning_agent(
+        args.request,
+        case_name=args.case_name,
+        model=args.model,
+        thinking=args.thinking,
+        deterministic=args.deterministic,
     )
 
 

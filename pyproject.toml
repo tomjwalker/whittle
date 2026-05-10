@@ -5,8 +5,11 @@ description = "Typed OpenFOAM case setup agent prototype for drone CFD workflows
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.115",
     "numpy>=1.26",
     "pydantic>=2.7",
+    "pydantic-ai-slim[openai]>=1.0.0",
+    "uvicorn[standard]>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -35,4 +38,3 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-

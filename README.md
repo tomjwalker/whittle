@@ -2,9 +2,10 @@
 
 Whittle is a small typed AI-engineering demo for drone CFD case setup.
 
-The current deterministic foundation does not run CFD and does not call an LLM.
-It creates typed OpenFOAM case skeletons from geometry inputs so the later
-PydanticAI layer has reliable tools to orchestrate.
+The deterministic foundation creates typed OpenFOAM case skeletons from
+geometry inputs. A first PydanticAI planning layer and local Next.js UI now sit
+above that foundation so vague requests can be turned into reviewed
+`ScenarioPlan` and `SimulationCaseSpec` objects.
 
 ## Thesis
 
@@ -65,6 +66,29 @@ Plan a rough request into typed scenario state:
 uv run whittle plan-request "Set up external cruise over a quadcopter at 10 m/s with spinning propellers."
 ```
 
+Run deterministic planner evals:
+
+```bash
+uv run whittle eval-planner
+```
+
+Run the planning agent. If `OPENAI_API_KEY` is not set, this returns a
+deterministic fallback response using the same public contract:
+
+```bash
+uv run whittle agent-plan "Set up cruise at 5 m/s with spinning propellers." --case-name agent_demo
+```
+
+Start the local API and UI:
+
+```bash
+uv run uvicorn whittle.api.app:app --reload --port 8000
+
+cd frontend
+npm install
+npm run dev
+```
+
 Generate a case from the local ignored hexacopter STL:
 
 ```bash
@@ -111,8 +135,8 @@ case/
 
 - No FreeCAD preprocessing.
 - No actuator disk source terms.
-- No OpenFOAM solver execution.
-- No Streamlit UI.
-- No PydanticAI orchestration yet.
+- No OpenFOAM solver execution from the agent/UI.
+- No automatic case writing without human review.
+- No hover/takeoff/ground-effect setup yet.
 
 See `docs/context/physics-envelope.md` for the supported scenario envelope.

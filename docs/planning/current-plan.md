@@ -8,7 +8,7 @@ roll/pitch/yaw attitude transforms for the legacy quadcopter case.
 ## Status
 
 - State: V0/V0.1 complete; V0.2 B/C1 smoke checks passed; V1 deterministic
-  planning scaffold started
+  evals and V2 planning-agent scaffold started
 - Owner: Tom / Codex
 - Last updated: 2026-05-10
 
@@ -29,6 +29,11 @@ roll/pitch/yaw attitude transforms for the legacy quadcopter case.
 - CLI can write the B/C attitude smoke-case suite.
 - CLI can deterministically plan a rough natural-language request into a
   `ScenarioPlan` and optional `SimulationCaseSpec`.
+- CLI can run deterministic planning eval fixtures.
+- CLI can run a PydanticAI planning agent with deterministic fallback when no
+  API key is configured.
+- FastAPI exposes local planning and write-case endpoints.
+- Next.js local UI can stream visible trace events and inspect the typed spec.
 
 ## Workstreams
 
@@ -40,6 +45,8 @@ roll/pitch/yaw attitude transforms for the legacy quadcopter case.
 5. Add typed MRF zones and attitude transforms. Done for file generation.
 6. Add machine-checkable physics envelope and deterministic scenario planner.
    First pass done.
+7. Add deterministic eval harness, PydanticAI planning agent, FastAPI endpoint,
+   and local Next.js UI. First pass done.
 
 ## Risks And Blockers
 
@@ -63,11 +70,11 @@ roll/pitch/yaw attitude transforms for the legacy quadcopter case.
 1. Smoke-test `legacy_box_mrf_combined_smoke` in OpenFOAM. If it passes, treat
    roll/yaw individual cases as optional debugging cases rather than mandatory
    Sunday blockers.
-2. Add an eval harness around the deterministic `plan-request` layer.
-3. Add PydanticAI orchestration after the deterministic planner/evals are
-   stable.
-4. Add a lightweight UI only after the planner/agent can produce useful
-   `ScenarioPlan` and `CaseSetupReport` objects.
+2. Run the deterministic eval harness after every planner/schema change.
+3. Add an OpenAI API key locally and smoke-test `whittle agent-plan` without
+   deterministic fallback.
+4. Start the FastAPI + Next.js UI and iterate on the interview-style planning
+   loop.
 
 ## Validation
 
@@ -86,3 +93,5 @@ roll/pitch/yaw attitude transforms for the legacy quadcopter case.
   `topoSet`, `checkMesh`, and five `simpleFoam` iterations.
 - Unit tests cover physics-envelope validation and deterministic scenario
   planning.
+- Unit tests cover deterministic eval fixtures, deterministic agent fallback,
+  and FastAPI planning endpoints.
