@@ -17,7 +17,8 @@ validation / evals -> human review -> product loop.
 ## Scope Right Now
 
 - Primary user: Tom, as an AI engineer with CFD/F1 aerodynamics background
-- Current phase: V0.2 deterministic MRF and attitude-transform foundation
+- Current phase: V0.2 deterministic MRF and attitude-transform foundation,
+  plus first V1 deterministic planning scaffold
 - Primary workflow: generate an inspectable OpenFOAM case skeleton for external
   drone aerodynamics from typed Pydantic models
 
@@ -58,9 +59,11 @@ For the supported CFD scenario envelope, see `docs/context/physics-envelope.md`.
 
 ## Near-Term Priorities
 
-1. Finish smoke-testing attitude-transformed MRF cases in WSL.
+1. Smoke-test the combined-attitude MRF case in WSL.
 2. Add deterministic evals around `plan-request`.
 3. Add PydanticAI orchestration after the planning/eval contract is stable.
+4. Add a lightweight chat UI once there is a useful planning/agent object to
+   display.
 
 ## Open Questions
 

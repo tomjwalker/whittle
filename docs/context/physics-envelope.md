@@ -84,7 +84,7 @@ MRF cases must run `topoSet` after `snappyHexMesh -overwrite` and before
 
 ### C. Attitude Transforms
 
-Status: implemented in file generation; pitch-only smoke run is in progress.
+Status: implemented in file generation; pitch-only smoke run passed.
 
 Supported planned cases:
 
@@ -105,6 +105,18 @@ Each transformed case must move these together:
 - MRF zone centres
 - MRF zone axes
 - MRF cylinder endpoints
+
+C1 pitch acceptance evidence from the first smoke run:
+
+- ParaView overlay showed the transformed assembly in the expected pitched pose.
+- `checkMesh` reported transformed nonzero `propFRZone`, `propBRZone`,
+  `propFLZone`, and `propBLZone` cell zones.
+- `simpleFoam` created `MRF1` through `MRF4` and completed five iterations.
+
+The strongest evidence that MRF zones tracked the transform is the combination
+of transformed `constant/MRFProperties`, transformed `system/topoSetDict`
+cylinder endpoints, nonzero transformed cell-zone bounding boxes in
+`checkMesh`, and successful MRF zone creation in `simpleFoam`.
 
 ### D. Differential Rotor Speeds
 
