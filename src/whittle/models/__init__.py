@@ -3,16 +3,21 @@
 from whittle.models.case_spec import BoundaryConditionPlan, SimulationCaseSpec
 from whittle.models.geometry import DroneGeometrySpec, GeometrySurfaceSpec, StlMetadata
 from whittle.models.openfoam import OpenFOAMCaseFiles
+from whittle.models.planning import PhysicsEnvelope, ScenarioPlan
 from whittle.models.reports import CaseSetupReport, TraceEvent
+from whittle.models.rotors import MRFZoneSpec, RotorAssemblySpec
 
 __all__ = [
     "BoundaryConditionPlan",
     "CaseSetupReport",
     "DroneGeometrySpec",
     "GeometrySurfaceSpec",
+    "MRFZoneSpec",
     "OpenFOAMCaseFiles",
+    "PhysicsEnvelope",
+    "RotorAssemblySpec",
+    "ScenarioPlan",
     "SimulationCaseSpec",
     "StlMetadata",
     "TraceEvent",
 ]
-

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from whittle.models.case_spec import SimulationCaseSpec
+from whittle.tools.physics_envelope import validate_physics_envelope
 
 
 def validate_case_spec(spec: SimulationCaseSpec) -> tuple[list[str], list[str], list[str]]:
@@ -18,6 +19,10 @@ def validate_case_spec(spec: SimulationCaseSpec) -> tuple[list[str], list[str], 
         missing.append("reference_velocity_mps must be positive.")
     else:
         checks.append("Reference velocity is positive.")
+        envelope_checks, envelope_warnings, envelope_missing = validate_physics_envelope(spec)
+        checks.extend(envelope_checks)
+        warnings.extend(envelope_warnings)
+        missing.extend(envelope_missing)
 
     if not spec.geometry.surfaces:
         missing.append("At least one geometry surface is required.")
@@ -29,6 +34,17 @@ def validate_case_spec(spec: SimulationCaseSpec) -> tuple[list[str], list[str], 
         missing.append("Geometry patch names must be unique.")
     else:
         checks.append("Geometry patch names are unique.")
+
+    if spec.rotor_model == "mrf":
+        if spec.mrf_zones:
+            checks.append("MRF rotor model includes at least one zone.")
+            cell_zones = [zone.cell_zone for zone in spec.mrf_zones]
+            if len(cell_zones) != len(set(cell_zones)):
+                missing.append("MRF cell-zone names must be unique.")
+            else:
+                checks.append("MRF cell-zone names are unique.")
+        else:
+            missing.append("MRF rotor model requested but no MRF zones were defined.")
 
     for surface in spec.geometry.surfaces:
         if not surface.source_path.exists():
@@ -44,10 +60,18 @@ def validate_case_spec(spec: SimulationCaseSpec) -> tuple[list[str], list[str], 
                     "meshing may be slow."
                 )
 
+    warnings.extend(spec.missing_information)
     warnings.append("OpenFOAM case has not been run through blockMesh/snappyHexMesh/checkMesh.")
-    warnings.append("MRF and actuator disk source terms are intentionally omitted in V0.")
+    if spec.rotor_model == "mrf":
+        warnings.append(
+            "MRF zones are generated from legacy reference data and require mesh validation."
+        )
+    else:
+        warnings.append(
+            "MRF and actuator disk source terms are intentionally omitted in this case."
+        )
 
-    return checks, _deduplicate(warnings), missing
+    return checks, _deduplicate(warnings), _deduplicate(missing + spec.missing_information)
 
 
 def validate_required_files(

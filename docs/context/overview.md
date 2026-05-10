@@ -1,6 +1,6 @@
 # Whittle Overview
 
-_Last updated: 2026-05-09_
+_Last updated: 2026-05-10_
 
 ## Product Vision
 
@@ -17,7 +17,7 @@ validation / evals -> human review -> product loop.
 ## Scope Right Now
 
 - Primary user: Tom, as an AI engineer with CFD/F1 aerodynamics background
-- Current phase: V0 deterministic foundation
+- Current phase: V0.2 deterministic MRF and attitude-transform foundation
 - Primary workflow: generate an inspectable OpenFOAM case skeleton for external
   drone aerodynamics from typed Pydantic models
 
@@ -27,14 +27,16 @@ validation / evals -> human review -> product loop.
 | --- | --- | --- |
 | Core package | Python 3.11+, Pydantic v2 | Typed domain state and validation |
 | Case writing | pathlib + deterministic templates | OpenFOAM file-generation first |
-| Geometry | STL metadata reader, NumPy later | Current hex STL remains local/ignored |
-| Agent layer | PydanticAI | Added after deterministic tools work |
+| Geometry | STL metadata reader, NumPy transforms | Current hex STL remains local/ignored |
+| Planning layer | Deterministic heuristics first | `plan-request` rehearses the agent contract |
+| Agent layer | PydanticAI | Added after deterministic planner/evals work |
 | Evals | pytest first, Pydantic Evals later | Start simple and deterministic |
 | UI | Streamlit optional | Only after CLI/core/evals work |
 | Solver | OpenFOAM v2012 in WSL | Execution is later than V0 case writing |
 | Post-pro | ParaView 5.13.2 | Existing Windows install found |
 
 For the current Pydantic model map, see `docs/context/schema-guide.md`.
+For the supported CFD scenario envelope, see `docs/context/physics-envelope.md`.
 
 ## Constraints
 
@@ -44,8 +46,8 @@ For the current Pydantic model map, see `docs/context/schema-guide.md`.
 - Do not commit raw secrets or large local CAD directories.
 - Keep the demo civil/educational: no weapons, targeting, evasion, or mission
   optimisation.
-- Do not use FreeCAD preprocessing, MRF, actuator disk source terms, solver
-  execution, or UI in V0.
+- Do not use FreeCAD preprocessing, actuator disk source terms, automated solver
+  execution, or UI in the deterministic foundation.
 
 ## Non-Goals
 
@@ -56,18 +58,16 @@ For the current Pydantic model map, see `docs/context/schema-guide.md`.
 
 ## Near-Term Priorities
 
-1. Generate a deterministic OpenFOAM case from typed models.
-2. Preserve legacy Isembard/OpenFOAM geometry assets that are useful for a
-   first rerun.
-3. Add tests and smoke commands that make the workflow explainable in
-   interviews.
+1. Finish smoke-testing attitude-transformed MRF cases in WSL.
+2. Add deterministic evals around `plan-request`.
+3. Add PydanticAI orchestration after the planning/eval contract is stable.
 
 ## Open Questions
 
 - Whether the monolithic hexacopter STL needs decimation or splitting before it
   can mesh reliably.
-- Which OpenFOAM execution command should be automated first once file
-  generation is stable.
+- How robust the legacy MRF cell-zone generation is under additional
+  roll/pitch/yaw transforms.
 
 ## Update Rule
 

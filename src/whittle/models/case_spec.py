@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from whittle.models.geometry import DroneGeometrySpec
+from whittle.models.rotors import MRFZoneSpec
 
 
 class BoundaryConditionPlan(BaseModel):
@@ -33,7 +34,8 @@ class SimulationCaseSpec(BaseModel):
     yaw_angle_deg: float = 0.0
     roll_angle_deg: float = 0.0
     pitch_angle_deg: float = 0.0
-    rotor_model: Literal["none", "actuator_disk_placeholder"] = "none"
+    rotor_model: Literal["none", "actuator_disk_placeholder", "mrf"] = "none"
+    mrf_zones: list[MRFZoneSpec] = Field(default_factory=list)
     solver_family: str = "simpleFoam"
     turbulence_model: str = "kOmegaSST"
     mesh_strategy: str = "blockMesh background mesh with snappyHexMesh surface snapping"
@@ -41,7 +43,7 @@ class SimulationCaseSpec(BaseModel):
     air_density_kg_m3: float = 1.225
     max_iterations: int = 500
     write_interval: int = 100
+    transform_origin_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
     missing_information: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     validation_checks: list[str] = Field(default_factory=list)
-

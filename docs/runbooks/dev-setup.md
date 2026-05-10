@@ -1,6 +1,6 @@
 # Development Setup
 
-_Last updated: 2026-05-09_
+_Last updated: 2026-05-10_
 
 ## Prerequisites
 
@@ -40,6 +40,18 @@ uv run whittle write-case --preset legacy-box --output outputs/legacy_box_v0
 # Generate a short smoke-run case for OpenFOAM shakedown
 uv run whittle write-case --preset legacy-box --output outputs/legacy_box_smoke --max-iterations 50 --write-interval 10
 
+# Generate a 5-iteration legacy MRF smoke case
+uv run whittle write-case --preset legacy-box --rotor-model mrf --mrf-omega-rad-s 1000 --max-iterations 5 --write-interval 5 --output outputs/legacy_box_mrf_smoke
+
+# Generate a 5-iteration pitch-transformed MRF smoke case
+uv run whittle write-case --preset legacy-box --rotor-model mrf --mrf-omega-rad-s 1000 --pitch-deg 10 --max-iterations 5 --write-interval 5 --output outputs/legacy_box_mrf_pitch10_smoke
+
+# Generate all B/C attitude smoke cases
+uv run whittle write-attitude-suite --output-root outputs --velocity 5 --mrf-omega-rad-s 1000 --max-iterations 5 --write-interval 5
+
+# Deterministically plan a rough user request before writing a case
+uv run whittle plan-request "Set up external cruise over a quadcopter at 10 m/s with spinning propellers."
+
 # Generate a single-STL V0 case from the local ignored hexacopter asset
 uv run whittle write-case --geometry cad/drone_model_hex.stl --geometry-mode single-stl --output outputs/hex_v0 --velocity 10
 ```
@@ -75,6 +87,20 @@ mkdir -p run_logs
 
 blockMesh 2>&1 | tee run_logs/blockMesh_$(date +%Y%m%d_%H%M%S).log
 snappyHexMesh -overwrite 2>&1 | tee run_logs/snappyHexMesh_$(date +%Y%m%d_%H%M%S).log
+checkMesh 2>&1 | tee run_logs/checkMesh_$(date +%Y%m%d_%H%M%S).log
+simpleFoam 2>&1 | tee run_logs/simpleFoam_$(date +%Y%m%d_%H%M%S).log
+```
+
+For MRF cases, `topoSet` is required after meshing so the rotor-cylinder
+`cellSet`s become the `cellZone`s referenced by `constant/MRFProperties`:
+
+```bash
+cd ~/OpenFOAM/cases/legacy_box_mrf_smoke
+mkdir -p run_logs
+
+blockMesh 2>&1 | tee run_logs/blockMesh_$(date +%Y%m%d_%H%M%S).log
+snappyHexMesh -overwrite 2>&1 | tee run_logs/snappyHexMesh_$(date +%Y%m%d_%H%M%S).log
+topoSet 2>&1 | tee run_logs/topoSet_$(date +%Y%m%d_%H%M%S).log
 checkMesh 2>&1 | tee run_logs/checkMesh_$(date +%Y%m%d_%H%M%S).log
 simpleFoam 2>&1 | tee run_logs/simpleFoam_$(date +%Y%m%d_%H%M%S).log
 ```

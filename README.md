@@ -2,8 +2,8 @@
 
 Whittle is a small typed AI-engineering demo for drone CFD case setup.
 
-The current V0 does not run CFD and does not call an LLM. It creates a typed,
-deterministic OpenFOAM case skeleton from geometry inputs so the later
+The current deterministic foundation does not run CFD and does not call an LLM.
+It creates typed OpenFOAM case skeletons from geometry inputs so the later
 PydanticAI layer has reliable tools to orchestrate.
 
 ## Thesis
@@ -41,6 +41,30 @@ Generate the known-good legacy split-surface case:
 uv run whittle write-case --preset legacy-box --output outputs/legacy_box_v0
 ```
 
+Generate a 5-iteration MRF rotor smoke case:
+
+```bash
+uv run whittle write-case --preset legacy-box --rotor-model mrf --mrf-omega-rad-s 1000 --max-iterations 5 --write-interval 5 --output outputs/legacy_box_mrf_smoke
+```
+
+Generate a 5-iteration pitch-transformed MRF case:
+
+```bash
+uv run whittle write-case --preset legacy-box --rotor-model mrf --mrf-omega-rad-s 1000 --pitch-deg 10 --max-iterations 5 --write-interval 5 --output outputs/legacy_box_mrf_pitch10_smoke
+```
+
+Generate all B/C attitude smoke cases:
+
+```bash
+uv run whittle write-attitude-suite --output-root outputs --velocity 5 --mrf-omega-rad-s 1000 --max-iterations 5 --write-interval 5
+```
+
+Plan a rough request into typed scenario state:
+
+```bash
+uv run whittle plan-request "Set up external cruise over a quadcopter at 10 m/s with spinning propellers."
+```
+
 Generate a case from the local ignored hexacopter STL:
 
 ```bash
@@ -65,6 +89,7 @@ case/
     omega
     nut
   constant/
+    MRFProperties optional
     transportProperties
     turbulenceProperties
     triSurface/
@@ -73,6 +98,7 @@ case/
     controlDict
     blockMeshDict
     snappyHexMeshDict
+    topoSetDict optional for MRF
     fvSchemes
     fvSolution
   Allrun
@@ -81,13 +107,12 @@ case/
   case_report.json
 ```
 
-## Deliberate V0 Limits
+## Deliberate Current Limits
 
 - No FreeCAD preprocessing.
-- No MRF.
 - No actuator disk source terms.
 - No OpenFOAM solver execution.
 - No Streamlit UI.
 - No PydanticAI orchestration yet.
 
-See `docs/planning/v0-openfoam-case-writer.md` for the implementation plan.
+See `docs/context/physics-envelope.md` for the supported scenario envelope.

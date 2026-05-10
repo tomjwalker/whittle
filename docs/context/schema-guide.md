@@ -1,14 +1,14 @@
 # Schema Guide
 
-_Last updated: 2026-05-09_
+_Last updated: 2026-05-10_
 
-This project uses Pydantic models as explicit workflow state. The important
-idea is that Whittle should not pass around anonymous dictionaries or hidden
-LLM text. Each stage receives and returns typed objects that can be validated,
+Whittle uses Pydantic models as explicit workflow state. The important idea is
+that the project should not pass around anonymous dictionaries or hidden LLM
+text. Each stage receives and returns typed objects that can be validated,
 serialized, tested, evaluated, and shown to a human reviewer.
 
-The current V0 schemas are intentionally small. They describe geometry,
-simulation intent, OpenFOAM file output, and the human-reviewable report.
+The current schemas describe geometry, rotor modelling, simulation intent,
+OpenFOAM file output, and the human-reviewable report.
 
 ## Current Data Flow
 
@@ -17,6 +17,8 @@ STL files
   -> StlMetadata
   -> GeometrySurfaceSpec
   -> DroneGeometrySpec
+  -> MRFZoneSpec when requested
+  -> PhysicsEnvelope validation
   -> BoundaryConditionPlan
   -> SimulationCaseSpec
   -> OpenFOAM case writer
@@ -60,8 +62,8 @@ Purpose:
 - Records what Whittle can infer from a CAD/STL file without running OpenFOAM.
 - Helps detect large files, likely millimetre units, missing bounds, and other
   geometry risks early.
-- Gives future evals deterministic facts to check, such as “large STL warning
-  is present.”
+- Gives future evals deterministic facts to check, such as "large STL warning
+  is present."
 
 ### `GeometrySurfaceSpec`
 
@@ -105,6 +107,83 @@ Purpose:
 - Provides the patch list used by boundary-condition generation.
 - Keeps geometry assumptions close to geometry facts.
 
+## Rotor Schemas
+
+Defined in `src/whittle/models/rotors.py`.
+
+### `MRFZoneSpec`
+
+One Multiple Reference Frame volume zone around one propeller.
+
+```python
+class MRFZoneSpec(BaseModel):
+    name: str
+    cell_zone: str
+    cylinder_name: str
+    centre_m: tuple[float, float, float]
+    axis: tuple[float, float, float]
+    radius_m: float
+    height_m: float
+    omega_rad_s: float
+    source_patch: str | None = None
+    notes: list[str] = []
+```
+
+Purpose:
+
+- Keeps rotor centres, axes, cylinder dimensions, and signed angular speed in
+  typed state.
+- Lets the case writer generate `snappyHexMeshDict` searchable cylinders,
+  `system/topoSetDict` cell-zone creation, and `constant/MRFProperties` from
+  the same source of truth.
+- Makes attitude transforms testable before OpenFOAM is run.
+
+### `RotorAssemblySpec`
+
+Small grouping object for future rotor models.
+
+```python
+class RotorAssemblySpec(BaseModel):
+    model: str
+    zones: list[MRFZoneSpec] = []
+    notes: list[str] = []
+```
+
+Purpose:
+
+- Reserved for the point where rotor modelling grows beyond a flat list on
+  `SimulationCaseSpec`.
+
+## Planning Schemas
+
+Defined in `src/whittle/models/planning.py`.
+
+### `PhysicsEnvelope`
+
+Machine-checkable limits for the early CFD demo.
+
+Purpose:
+
+- Keeps speed, attitude, and MRF omega limits in typed code rather than only in
+  prose.
+- Lets validation and future evals reject or warn on scenarios outside the
+  current OpenFOAM writer's intended envelope.
+- Gives the future agent a compact policy object: what it is allowed to plan,
+  what it should ask about, and what it should mark as out of scope.
+
+### `ScenarioPlan`
+
+Output of the deterministic pre-agent planning layer.
+
+Purpose:
+
+- Captures the upstream state before case writing: scenario type, extracted
+  `SimulationCaseSpec`, assumptions, warnings, missing information, clarifying
+  questions, and visible trace events.
+- Acts as the first non-LLM rehearsal for the later PydanticAI workflow.
+- Is a natural response object for a chat UI: the user sees what was extracted
+  and what still needs clarification.
+
 ## Case Schemas
 
 Defined in `src/whittle/models/case_spec.py`.
@@ -145,7 +224,8 @@ class SimulationCaseSpec(BaseModel):
     yaw_angle_deg: float = 0.0
     roll_angle_deg: float = 0.0
     pitch_angle_deg: float = 0.0
-    rotor_model: Literal["none", "actuator_disk_placeholder"] = "none"
+    rotor_model: Literal["none", "actuator_disk_placeholder", "mrf"] = "none"
+    mrf_zones: list[MRFZoneSpec] = []
     solver_family: str = "simpleFoam"
     turbulence_model: str = "kOmegaSST"
     mesh_strategy: str = "blockMesh background mesh with snappyHexMesh surface snapping"
@@ -153,6 +233,7 @@ class SimulationCaseSpec(BaseModel):
     air_density_kg_m3: float = 1.225
     max_iterations: int = 500
     write_interval: int = 100
+    transform_origin_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
     missing_information: list[str] = []
     assumptions: list[str] = []
     validation_checks: list[str] = []
@@ -160,7 +241,7 @@ class SimulationCaseSpec(BaseModel):
 
 Purpose:
 
-- Acts as the contract between “planning” and “case writing.”
+- Acts as the contract between "planning" and "case writing."
 - Contains the choices a human would want to review: solver, turbulence model,
   velocity, angles, rotor model, assumptions, and missing information.
 - Gives future PydanticAI agents a structured output target rather than asking
@@ -242,14 +323,15 @@ Purpose:
 - Keeps generated files, assumptions, warnings, missing information, and trace
   events together.
 - Is the natural object to show in a CLI summary, JSON artifact, eval report,
-  or future Streamlit UI.
+  or future Streamlit/Next.js UI.
 
 ## Design Notes
 
 - These schemas are deliberately domain-specific. They describe CFD setup
   concepts, not generic agent messages.
-- They are also deliberately incomplete. V0 does not yet model actuator disks,
-  coordinate transforms, log parsing, convergence state, or post-processing.
+- They are also deliberately incomplete. V0.2 models MRF zones and rigid
+  transforms, but not actuator-disk source terms, log parsing, convergence
+  state, or post-processing.
 - The right growth pattern is: add fields when a test, eval, agent tool, or UI
   genuinely needs them.
 - Do not use the Pydantic models as a dumping ground for every possible

@@ -9,6 +9,12 @@ from pathlib import Path
 
 from whittle.models.case_spec import SimulationCaseSpec
 from whittle.models.reports import CaseSetupReport, TraceEvent
+from whittle.tools.stl_tools import write_transformed_stl
+from whittle.tools.transform_tools import (
+    has_nonzero_attitude,
+    mrf_cylinder_endpoints,
+    rotation_matrix,
+)
 from whittle.tools.validation_tools import validate_case_spec, validate_required_files
 
 INITIAL_FIELDS = ("U", "p", "k", "omega", "nut")
@@ -60,11 +66,29 @@ def write_openfoam_case(spec: SimulationCaseSpec, output_dir: Path) -> CaseSetup
     ]
 
     files_written: list[str] = []
+    transform_geometry = has_nonzero_attitude(
+        roll_deg=spec.roll_angle_deg,
+        pitch_deg=spec.pitch_angle_deg,
+        yaw_deg=spec.yaw_angle_deg,
+    )
+    transform = rotation_matrix(
+        roll_deg=spec.roll_angle_deg,
+        pitch_deg=spec.pitch_angle_deg,
+        yaw_deg=spec.yaw_angle_deg,
+    )
+
     for surface in spec.geometry.surfaces:
         if not surface.source_path.exists():
             continue
         destination = tri_surface_dir / surface.target_file_name
-        if surface.source_path.resolve() != destination.resolve():
+        if transform_geometry:
+            write_transformed_stl(
+                surface.source_path,
+                destination,
+                transform,
+                spec.transform_origin_m,
+            )
+        elif surface.source_path.resolve() != destination.resolve():
             shutil.copy2(surface.source_path, destination)
         files_written.append(_relative(case_dir, destination))
 
@@ -85,12 +109,16 @@ def write_openfoam_case(spec: SimulationCaseSpec, output_dir: Path) -> CaseSetup
         _turbulence_properties(spec),
         files_written,
     )
+    if spec.rotor_model == "mrf":
+        _write(case_dir, "constant/MRFProperties", _mrf_properties(spec), files_written)
     _write(case_dir, "system/controlDict", _control_dict(spec), files_written)
     _write(case_dir, "system/blockMeshDict", _block_mesh_dict(spec), files_written)
     _write(case_dir, "system/snappyHexMeshDict", _snappy_hex_mesh_dict(spec), files_written)
+    if spec.rotor_model == "mrf":
+        _write(case_dir, "system/topoSetDict", _topo_set_dict(spec), files_written)
     _write(case_dir, "system/fvSchemes", _fv_schemes(), files_written)
     _write(case_dir, "system/fvSolution", _fv_solution(), files_written)
-    _write(case_dir, "Allrun", _allrun(), files_written)
+    _write(case_dir, "Allrun", _allrun(spec), files_written)
     _write(case_dir, "Allclean", _allclean(), files_written)
 
     for script_name in ("Allrun", "Allclean"):
@@ -143,7 +171,7 @@ def write_openfoam_case(spec: SimulationCaseSpec, output_dir: Path) -> CaseSetup
         recommended_next_steps=[
             "Inspect generated OpenFOAM dictionaries and patch names.",
             "Copy or open the case under WSL OpenFOAM when ready.",
-            "Run blockMesh, snappyHexMesh -overwrite, checkMesh, then simpleFoam manually.",
+            _manual_run_hint(spec),
         ],
         trace_events=trace_events,
         validation_checks=validation_checks,
@@ -163,9 +191,11 @@ def _expected_files(spec: SimulationCaseSpec) -> list[str]:
         "0/nut",
         "constant/transportProperties",
         "constant/turbulenceProperties",
+        *(["constant/MRFProperties"] if spec.rotor_model == "mrf" else []),
         "system/controlDict",
         "system/blockMeshDict",
         "system/snappyHexMeshDict",
+        *(["system/topoSetDict"] if spec.rotor_model == "mrf" else []),
         "system/fvSchemes",
         "system/fvSolution",
         "Allrun",
@@ -392,6 +422,7 @@ def _block_mesh_dict(spec: SimulationCaseSpec) -> str:
 def _snappy_hex_mesh_dict(spec: SimulationCaseSpec) -> str:
     geometry_entries = []
     refinement_entries = []
+    refinement_region_entries = []
     for surface in spec.geometry.surfaces:
         scale_line = f"        scale {surface.scale_to_m:g};\n" if surface.scale_to_m != 1.0 else ""
         geometry_entries.append(
@@ -411,6 +442,26 @@ def _snappy_hex_mesh_dict(spec: SimulationCaseSpec) -> str:
             "            {\n"
             "                type wall;\n"
             "            }\n"
+            "        }\n"
+        )
+
+    for zone in spec.mrf_zones:
+        point1, point2 = mrf_cylinder_endpoints(zone)
+        geometry_entries.append(
+            f"    {zone.cylinder_name}\n"
+            "    {\n"
+            "        type searchableCylinder;\n"
+            f"        point1 {_foam_vector(point1)};\n"
+            f"        point2 {_foam_vector(point2)};\n"
+            f"        radius {zone.radius_m:g};\n"
+            "    }\n"
+        )
+        refinement_region_entries.append(
+            f"        {zone.cylinder_name}\n"
+            "        {\n"
+            "            mode inside;\n"
+            "            levels ((1e15 0));\n"
+            f"            cellZone {zone.cell_zone};\n"
             "        }\n"
         )
 
@@ -437,6 +488,7 @@ def _snappy_hex_mesh_dict(spec: SimulationCaseSpec) -> str:
         + "    }\n\n"
         + "    refinementRegions\n"
         + "    {\n"
+        + "\n".join(refinement_region_entries)
         + "    }\n\n"
         + "    resolveFeatureAngle 25;\n"
         + "    locationInMesh (0 0 0.1);\n"
@@ -472,6 +524,67 @@ def _snappy_hex_mesh_dict(spec: SimulationCaseSpec) -> str:
         + "}\n\n"
         + "mergeTolerance 1e-6;\n\n"
         + "// ************************************************************************* //\n"
+    )
+
+
+def _mrf_properties(spec: SimulationCaseSpec) -> str:
+    zone_blocks = []
+    for zone in spec.mrf_zones:
+        zone_blocks.append(
+            f"{zone.name}\n"
+            "{\n"
+            "    active         yes;\n"
+            f"    cellZone       {zone.cell_zone};\n"
+            "    nonRotatingPatches ();\n"
+            f"    origin         {_foam_vector(zone.centre_m)};\n"
+            f"    axis           {_foam_vector(zone.axis)};\n"
+            f"    omega          {zone.omega_rad_s:g};\n"
+            "}\n"
+        )
+    return _header("dictionary", "MRFProperties") + "\n".join(zone_blocks)
+
+
+def _topo_set_dict(spec: SimulationCaseSpec) -> str:
+    cylinder_actions = []
+    zone_actions = []
+    for zone in spec.mrf_zones:
+        point1, point2 = mrf_cylinder_endpoints(zone)
+        cylinder_actions.append(
+            f"    // {zone.name}: select cells inside the rotor cylinder.\n"
+            "    {\n"
+            f"        name    {zone.cell_zone};\n"
+            "        type    cellSet;\n"
+            "        action  new;\n"
+            "        source  cylinderToCell;\n"
+            "        sourceInfo\n"
+            "        {\n"
+            f"            p1     {_foam_vector(point1)};\n"
+            f"            p2     {_foam_vector(point2)};\n"
+            f"            radius {zone.radius_m:g};\n"
+            "        }\n"
+            "    }\n"
+        )
+        zone_actions.append(
+            f"    // Convert {zone.cell_zone} cellSet into an MRF cellZone.\n"
+            "    {\n"
+            f"        name    {zone.cell_zone};\n"
+            "        type    cellZoneSet;\n"
+            "        action  new;\n"
+            "        source  setToCellZone;\n"
+            "        sourceInfo\n"
+            "        {\n"
+            f"            set {zone.cell_zone};\n"
+            "        }\n"
+            "    }\n"
+        )
+
+    return (
+        _header("dictionary", "topoSetDict", "system")
+        + "actions\n(\n"
+        + "\n".join(cylinder_actions)
+        + "\n"
+        + "\n".join(zone_actions)
+        + ");\n\n// ************************************************************************* //\n"
     )
 
 
@@ -524,13 +637,15 @@ def _fv_solution() -> str:
     )
 
 
-def _allrun() -> str:
+def _allrun(spec: SimulationCaseSpec) -> str:
+    mrf_steps = "runApplication topoSet\n" if spec.rotor_model == "mrf" else ""
     return (
         "#!/bin/sh\n"
         'cd "${0%/*}" || exit\n'
         '. ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions\n\n'
         "runApplication blockMesh\n"
         "runApplication snappyHexMesh -overwrite\n"
+        f"{mrf_steps}"
         "runApplication checkMesh\n"
         "runApplication simpleFoam\n"
     )
@@ -578,6 +693,16 @@ def _block_patch(name: str, patch_type: str, face: str) -> str:
     )
 
 
+def _foam_vector(values: tuple[float, float, float]) -> str:
+    return f"({_foam_float(values[0])} {_foam_float(values[1])} {_foam_float(values[2])})"
+
+
+def _foam_float(value: float) -> str:
+    if abs(value) < 5e-13:
+        value = 0.0
+    return f"{value:.9g}"
+
+
 def _solver_block(field: str, solver: str, preconditioner: str, tolerance: str) -> str:
     return (
         f"    {field}\n"
@@ -608,3 +733,12 @@ def _characteristic_length_m(spec: SimulationCaseSpec) -> float:
             raw_length = max(surface.metadata.dimensions_raw)
             lengths.append(max(0.1, raw_length * surface.scale_to_m))
     return max(lengths, default=0.5)
+
+
+def _manual_run_hint(spec: SimulationCaseSpec) -> str:
+    if spec.rotor_model == "mrf":
+        return (
+            "Run blockMesh, snappyHexMesh -overwrite, topoSet, checkMesh, "
+            "then simpleFoam manually."
+        )
+    return "Run blockMesh, snappyHexMesh -overwrite, checkMesh, then simpleFoam manually."
