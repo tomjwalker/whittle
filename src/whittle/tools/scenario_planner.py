@@ -71,8 +71,44 @@ def plan_case_request(
         )
 
     if scenario_type == "hover_or_takeoff":
-        missing.append("Hover/takeoff needs a later ground-effect or rotor-source setup.")
-        questions.append("For today, should I approximate this as forward flight with MRF rotors?")
+        if _is_yaw_in_place_request(text):
+            missing.append(
+                "Yaw-in-place needs a later manoeuvre model with differential rotor speeds."
+            )
+            questions.extend(
+                [
+                    "What yaw rate did you have in mind, in degrees per second? "
+                    "A cautious small-quadcopter demo value would be around 30-90 deg/s.",
+                    "Should I keep this as a future yaw-manoeuvre case, or approximate "
+                    "it today as steady forward flight with MRF rotors?",
+                ]
+            )
+        else:
+            missing.append("Hover/takeoff needs a later ground-effect or rotor-source setup.")
+            questions.append(
+                "For today, should I approximate this as forward flight with MRF rotors?"
+            )
+        return _plan(
+            request,
+            scenario_type,
+            assumptions,
+            warnings,
+            missing,
+            questions,
+            trace_events,
+        )
+
+    if scenario_type == "trim_guidance":
+        missing.append(
+            "Trim guidance needs a later force-balance model or a sweep, "
+            "not a single validated case."
+        )
+        questions.extend(
+            [
+                "Should I propose a small pitch/rotor-speed sweep for this speed?",
+                "Do you want the first supported approximation as steady cruise with MRF rotors?",
+            ]
+        )
         return _plan(
             request,
             scenario_type,
@@ -167,7 +203,33 @@ def _classify_request(text: str) -> ScenarioType:
         return "unsupported"
     if any(term in text for term in ("duct", "internal flow", "pipe")):
         return "internal_flow"
-    if any(term in text for term in ("hover", "takeoff", "take-off", "landing")):
+    if any(
+        term in text
+        for term in (
+            "what scenarios",
+            "what can you help",
+            "what can whittle",
+            "what are the supported",
+            "what do you support",
+        )
+    ):
+        return "vague_request"
+    if _is_trim_guidance_request(text):
+        return "trim_guidance"
+    if any(
+        term in text
+        for term in (
+            "hover",
+            "takeoff",
+            "take-off",
+            "landing",
+            "spin in place",
+            "spinning in place",
+            "rotate in place",
+            "yaw in place",
+            "yawing in place",
+        )
+    ):
         return "hover_or_takeoff"
     if any(term in text for term in ("make it aero", "more aerodynamic", "better aerodynamic")):
         return "vague_request"
@@ -196,6 +258,37 @@ def _extract_rotor_model(text: str) -> str:
     if any(term in text for term in ("prop", "rotor", "downwash", "swirl", "mrf", "spinning")):
         return "mrf"
     return "none"
+
+
+def _is_yaw_in_place_request(text: str) -> bool:
+    return any(
+        term in text
+        for term in (
+            "yawing in place",
+            "yaw in place",
+            "spinning in place",
+            "spin in place",
+            "rotate in place",
+        )
+    )
+
+
+def _is_trim_guidance_request(text: str) -> bool:
+    has_trim_language = any(
+        term in text
+        for term in (
+            "what kind of pitch",
+            "what pitch",
+            "which pitch",
+            "rotor speeds",
+            "rotor speed",
+            "support that drone speed",
+            "support this drone speed",
+            "trim",
+        )
+    )
+    has_speed = _extract_speed(text) is not None or "faster" in text or "speed" in text
+    return has_trim_language and has_speed
 
 
 def _plan(

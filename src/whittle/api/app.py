@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from whittle.agents.cfd_planning_agent import (
     DEFAULT_AGENT_MODEL,
     DEFAULT_AGENT_THINKING,
+    ConversationMessage,
     run_planning_agent,
     stream_planning_agent,
 )
@@ -34,6 +35,7 @@ class PlanRequest(BaseModel):
     model: str | None = None
     thinking: str | bool | None = None
     deterministic: bool = False
+    conversation_history: list[ConversationMessage] = Field(default_factory=list)
 
 
 class WriteCaseRequest(BaseModel):
@@ -81,6 +83,7 @@ def create_app() -> FastAPI:
             model=request.model,
             thinking=request.thinking,
             deterministic=request.deterministic,
+            conversation_history=request.conversation_history,
         )
 
     @app.post("/api/plan/stream")
@@ -92,6 +95,7 @@ def create_app() -> FastAPI:
                 model=request.model,
                 thinking=request.thinking,
                 deterministic=request.deterministic,
+                conversation_history=request.conversation_history,
             ):
                 yield (json.dumps(event) + "\n").encode("utf-8")
 

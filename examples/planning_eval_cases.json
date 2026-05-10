@@ -35,6 +35,20 @@
     "expected_missing_contains": ["does not specify"]
   },
   {
+    "name": "capabilities_question",
+    "request": "What scenarios can you help me with?",
+    "expected_scenario_type": "vague_request",
+    "expect_spec": false,
+    "expected_missing_contains": ["does not specify"]
+  },
+  {
+    "name": "trim_guidance_question",
+    "request": "At 10 m/s, what kind of pitch and rotor speeds would support that drone speed?",
+    "expected_scenario_type": "trim_guidance",
+    "expect_spec": false,
+    "expected_missing_contains": ["Trim guidance"]
+  },
+  {
     "name": "internal_duct_rejected",
     "request": "Set up internal flow through a duct in the drone.",
     "expected_scenario_type": "internal_flow",
@@ -47,6 +61,20 @@
     "expected_scenario_type": "hover_or_takeoff",
     "expect_spec": false,
     "expected_missing_contains": ["ground-effect"]
+  },
+  {
+    "name": "spin_in_place_later",
+    "request": "I'd like to simulate my drone spinning in place.",
+    "expected_scenario_type": "hover_or_takeoff",
+    "expect_spec": false,
+    "expected_missing_contains": ["Yaw-in-place"]
+  },
+  {
+    "name": "yawing_in_place_later",
+    "request": "I want to simulate my drone yawing in place.",
+    "expected_scenario_type": "hover_or_takeoff",
+    "expect_spec": false,
+    "expected_missing_contains": ["Yaw-in-place"]
   },
   {
     "name": "unsupported_weapon",

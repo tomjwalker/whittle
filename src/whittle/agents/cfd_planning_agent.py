@@ -6,10 +6,11 @@ that planner with a conversational interface and visible trace events.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
 
 from whittle.models.agent import PlanningAgentResponse
 from whittle.models.planning import ScenarioPlan
@@ -44,6 +45,46 @@ Current scope:
 """
 
 
+class AgentPlanningDraft(BaseModel):
+    """Strict-schema-friendly model output for the PydanticAI agent."""
+
+    status: Literal[
+        "needs_clarification",
+        "ready_for_human_review",
+        "ready_to_write_case",
+        "out_of_scope",
+        "error",
+    ]
+    assistant_message: str
+    next_actions: list[str] = Field(default_factory=list)
+
+
+class ValidationSummary(BaseModel):
+    """Compact model-visible validation summary."""
+
+    check_count: int
+    warning_count: int
+    missing_count: int
+    warnings: list[str] = Field(default_factory=list)
+    missing_information: list[str] = Field(default_factory=list)
+
+
+class ConversationMessage(BaseModel):
+    """Prior chat message passed from the UI."""
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class TrimGuidance(BaseModel):
+    """Heuristic guidance for planning a future trim/sweep workflow."""
+
+    velocity_mps: float
+    pitch_sweep_deg: list[float]
+    omega_sweep_rad_s: list[float]
+    note: str
+
+
 async def run_planning_agent(
     user_request: str,
     *,
@@ -51,6 +92,7 @@ async def run_planning_agent(
     model: str | None = None,
     thinking: str | bool | None = None,
     deterministic: bool = False,
+    conversation_history: list[ConversationMessage] | None = None,
 ) -> PlanningAgentResponse:
     """Run the planning agent, falling back to deterministic planning when needed."""
 
@@ -69,11 +111,16 @@ async def run_planning_agent(
     try:
         agent = _build_agent(model_name, thinking_setting)
         result = await agent.run(
-            _agent_prompt(user_request, case_name),
+            _agent_prompt(user_request, case_name, conversation_history),
             model_settings={"thinking": thinking_setting},
         )
-        response = PlanningAgentResponse.model_validate(result.output)
-        return _normalise_response(response, model_name)
+        draft = AgentPlanningDraft.model_validate(result.output)
+        response = build_deterministic_agent_response(
+            user_request,
+            case_name=case_name,
+            model=model_name,
+        )
+        return _apply_model_draft(response, draft, model_name)
     except Exception as exc:  # pragma: no cover - exercised only with live provider failures.
         fallback = build_deterministic_agent_response(
             user_request,
@@ -102,6 +149,7 @@ async def stream_planning_agent(
     model: str | None = None,
     thinking: str | bool | None = None,
     deterministic: bool = False,
+    conversation_history: list[ConversationMessage] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield NDJSON-friendly visible events for the planning UI."""
 
@@ -130,52 +178,20 @@ async def stream_planning_agent(
         yield {"type": "complete", "response": response.model_dump(mode="json")}
         return
 
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-
-    async def handle_event(event: Any) -> None:
-        visible_event = _serialise_pydantic_event(event)
-        if visible_event is not None:
-            await queue.put(visible_event)
-
-    async def run_model() -> None:
-        try:
-            agent = _build_agent(model_name, thinking_setting)
-            result = await agent.run(
-                _agent_prompt(user_request, case_name),
-                model_settings={"thinking": thinking_setting},
-                event_stream_handler=handle_event,
-            )
-            response = _normalise_response(
-                PlanningAgentResponse.model_validate(result.output),
-                model_name,
-            )
-            await queue.put({"type": "complete", "response": response.model_dump(mode="json")})
-        except Exception as exc:  # pragma: no cover - live provider path.
-            fallback = build_deterministic_agent_response(
-                user_request,
-                case_name=case_name,
-                model=model_name,
-            )
-            fallback.status = "error"
-            fallback.assistant_message = (
-                "The model-backed planner failed, so I returned the deterministic planning result. "
-                f"Error: {exc}"
-            )
-            await queue.put(
-                _stream_trace("AgentError", fallback.assistant_message, {"error": str(exc)})
-            )
-            await queue.put({"type": "complete", "response": fallback.model_dump(mode="json")})
-
-    task = asyncio.create_task(run_model())
-    try:
-        while True:
-            item = await queue.get()
-            yield item
-            if item.get("type") == "complete":
-                break
-    finally:
-        if not task.done():
-            task.cancel()
+    yield _stream_trace(
+        "AgentStarted",
+        "PydanticAI planner started with deterministic tools available.",
+        {"model": model_name},
+    )
+    response = await run_planning_agent(
+        user_request,
+        case_name=case_name,
+        model=model_name,
+        thinking=thinking_setting,
+        deterministic=False,
+        conversation_history=conversation_history,
+    )
+    yield {"type": "complete", "response": response.model_dump(mode="json")}
 
 
 def build_deterministic_agent_response(
@@ -195,11 +211,7 @@ def build_deterministic_agent_response(
             data={"case_name": case_name},
         ),
         *plan.trace_events,
-        TraceEvent(
-            event_type="HumanReviewNeeded",
-            message="Planner output needs human review before writing files.",
-            data={"status": status},
-        ),
+        _terminal_trace_event(status),
     ]
     return PlanningAgentResponse(
         status=status,
@@ -223,7 +235,7 @@ def _build_agent(model: str, thinking: str | bool):
     agent = Agent(
         model,
         instructions=_SYSTEM_PROMPT,
-        output_type=PlanningAgentResponse,
+        output_type=AgentPlanningDraft,
         model_settings={"thinking": thinking},
     )
 
@@ -244,22 +256,52 @@ def _build_agent(model: str, thinking: str | bool):
         return plan.model_dump(mode="json")
 
     @agent.tool_plain
-    def validate_scenario_plan(plan_data: dict[str, Any]) -> dict[str, Any]:
-        """Validate a drafted plan against the physics envelope."""
+    def validate_scenario_request(
+        user_request: str,
+        case_name: str = "agent_planned_case",
+    ) -> ValidationSummary:
+        """Validate a drafted natural-language request against the physics envelope."""
 
-        plan = ScenarioPlan.model_validate(plan_data)
+        plan = plan_case_request(user_request, case_name=case_name)
         if plan.spec is None:
-            return {
-                "checks": [],
-                "warnings": plan.warnings,
-                "missing_information": plan.missing_information,
-            }
+            return ValidationSummary(
+                check_count=0,
+                warning_count=len(plan.warnings),
+                missing_count=len(plan.missing_information),
+                warnings=plan.warnings,
+                missing_information=plan.missing_information,
+            )
         checks, warnings, missing = validate_physics_envelope(plan.spec, DEFAULT_PHYSICS_ENVELOPE)
-        return {
-            "checks": checks,
-            "warnings": warnings,
-            "missing_information": missing,
-        }
+        return ValidationSummary(
+            check_count=len(checks),
+            warning_count=len(warnings),
+            missing_count=len(missing),
+            warnings=warnings,
+            missing_information=missing,
+        )
+
+    @agent.tool_plain
+    def get_trim_guidance(velocity_mps: float = 10.0) -> TrimGuidance:
+        """Return conservative educational sweep guidance for a future trim workflow."""
+
+        if velocity_mps <= 6:
+            pitch_sweep = [0.0, 3.0, 6.0]
+            omega_sweep = [800.0, 1000.0, 1200.0]
+        elif velocity_mps <= 12:
+            pitch_sweep = [3.0, 6.0, 9.0, 12.0]
+            omega_sweep = [900.0, 1100.0, 1300.0]
+        else:
+            pitch_sweep = [6.0, 10.0, 14.0, 18.0]
+            omega_sweep = [1100.0, 1400.0, 1700.0]
+        return TrimGuidance(
+            velocity_mps=velocity_mps,
+            pitch_sweep_deg=pitch_sweep,
+            omega_sweep_rad_s=omega_sweep,
+            note=(
+                "This is not a solved trim state. It is a suggested sweep to find "
+                "force/moment balance in later tooling."
+            ),
+        )
 
     return agent
 
@@ -272,15 +314,36 @@ def _can_use_model(model: str) -> bool:
     return True
 
 
-def _agent_prompt(user_request: str, case_name: str) -> str:
+def _agent_prompt(
+    user_request: str,
+    case_name: str,
+    conversation_history: list[ConversationMessage] | None = None,
+) -> str:
     return (
         f"Case name: {case_name}\n"
+        f"{_format_history(conversation_history)}"
         f"User request: {user_request}\n\n"
         "First call draft_scenario_plan. Then call get_physics_envelope or "
-        "validate_scenario_plan if needed. Return a PlanningAgentResponse. "
+        "validate_scenario_request if needed. For trim, pitch, rotor-speed, "
+        "yaw-in-place, or manoeuvre coaching questions, call get_trim_guidance "
+        "when useful. Return an AgentPlanningDraft. "
         "Set status to ready_for_human_review only when a SimulationCaseSpec exists "
-        "and no blocking missing_information remains."
+        "and no blocking missing_information remains. If the user asks a question "
+        "or needs coaching, prefer needs_clarification and ask a concrete next "
+        "question instead of writing files."
     )
+
+
+def _format_history(history: list[ConversationMessage] | None) -> str:
+    if not history:
+        return ""
+    recent = history[-8:]
+    lines = ["Recent conversation:"]
+    for item in recent:
+        content = item.content.strip()
+        if content:
+            lines.append(f"{item.role}: {content}")
+    return "\n".join(lines) + "\n\n"
 
 
 def _normalise_response(response: PlanningAgentResponse, model: str) -> PlanningAgentResponse:
@@ -288,6 +351,32 @@ def _normalise_response(response: PlanningAgentResponse, model: str) -> Planning
     response.source = "pydantic_ai"
     if response.scenario_plan and not response.trace_events:
         response.trace_events = response.scenario_plan.trace_events
+    return response
+
+
+def _apply_model_draft(
+    response: PlanningAgentResponse,
+    draft: AgentPlanningDraft,
+    model: str,
+) -> PlanningAgentResponse:
+    response.model = model
+    response.source = "pydantic_ai"
+    response.status = draft.status
+    response.assistant_message = draft.assistant_message
+    for event in response.trace_events:
+        if event.event_type == "AgentStarted":
+            event.event_type = "DeterministicDraftCreated"
+            event.message = "Deterministic planner drafted case state for model review."
+            event.data = {"model": model}
+    if draft.next_actions:
+        response.next_actions = draft.next_actions
+    response.trace_events.append(
+        TraceEvent(
+            event_type="AgentOutputPlanned",
+            message="Model reviewed the deterministic draft and produced a response.",
+            data={"status": draft.status},
+        )
+    )
     return response
 
 
@@ -325,6 +414,26 @@ def _next_actions_from_plan(plan: ScenarioPlan, status: str) -> list[str]:
     if plan.clarifying_questions:
         return plan.clarifying_questions
     return ["Revise the request into the supported external drone-aero envelope."]
+
+
+def _terminal_trace_event(status: str) -> TraceEvent:
+    if status == "ready_for_human_review":
+        return TraceEvent(
+            event_type="HumanReviewNeeded",
+            message="Planner output needs human review before writing files.",
+            data={"status": status},
+        )
+    if status == "needs_clarification":
+        return TraceEvent(
+            event_type="ClarificationNeeded",
+            message="Planner needs more information before files can be written.",
+            data={"status": status},
+        )
+    return TraceEvent(
+        event_type="RequestOutOfScope",
+        message="Planner classified the request outside the current physics envelope.",
+        data={"status": status},
+    )
 
 
 def _stream_trace(

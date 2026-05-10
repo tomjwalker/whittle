@@ -13,6 +13,7 @@ ScenarioType = Literal[
     "external_cruise",
     "attitude_transform",
     "hover_or_takeoff",
+    "trim_guidance",
     "internal_flow",
     "vague_request",
     "unsupported",

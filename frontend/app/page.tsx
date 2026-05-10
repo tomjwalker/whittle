@@ -43,6 +43,11 @@ type ChatTurn = {
   assistant: string;
 };
 
+type ConversationMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_WHITTLE_API_URL ?? "http://localhost:8000";
 
 const STARTERS = [
@@ -99,6 +104,7 @@ export default function Home() {
     setWriteStatus(null);
     setTrace([]);
     setResponse(null);
+    const conversationHistory = buildConversationHistory(turns);
 
     try {
       const res = await fetch(`${API_BASE}/api/plan/stream`, {
@@ -107,7 +113,8 @@ export default function Home() {
         body: JSON.stringify({
           message: trimmed,
           case_name: caseName || "ui_planned_case",
-          deterministic
+          deterministic,
+          conversation_history: conversationHistory
         }),
         signal: controller.signal
       });
@@ -143,6 +150,19 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function buildConversationHistory(existingTurns: ChatTurn[]): ConversationMessage[] {
+    return existingTurns.flatMap((turn) => {
+      const messages: ConversationMessage[] = [];
+      if (turn.user.trim()) {
+        messages.push({ role: "user", content: turn.user });
+      }
+      if (turn.assistant.trim()) {
+        messages.push({ role: "assistant", content: turn.assistant });
+      }
+      return messages;
+    });
   }
 
   function handleStreamLine(line: string, turnId: string) {

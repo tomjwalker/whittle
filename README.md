@@ -82,7 +82,7 @@ uv run whittle agent-plan "Set up cruise at 5 m/s with spinning propellers." --c
 Start the local API and UI:
 
 ```bash
-uv run uvicorn whittle.api.app:app --reload --port 8000
+uv run uvicorn whittle.api.app:app --reload --reload-dir src --reload-dir backend --port 8000 --env-file backend/.env
 
 cd frontend
 npm install

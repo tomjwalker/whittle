@@ -85,7 +85,7 @@ uv run whittle write-case --geometry cad/drone_model_hex.stl --geometry-mode sin
 Start the FastAPI backend:
 
 ```bash
-uv run uvicorn whittle.api.app:app --reload --port 8000
+uv run uvicorn whittle.api.app:app --reload --reload-dir src --reload-dir backend --port 8000 --env-file backend/.env
 ```
 
 Useful endpoints:
