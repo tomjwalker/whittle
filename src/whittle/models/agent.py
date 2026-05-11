@@ -17,12 +17,26 @@ PlanningAgentStatus = Literal[
     "error",
 ]
 
+PlanningAgentPhase = Literal[
+    "idle",
+    "scope_explanation",
+    "scenario_discovery",
+    "clarifying",
+    "coaching",
+    "case_drafting",
+    "human_review",
+    "blocked",
+    "error",
+]
+
 
 class PlanningAgentResponse(BaseModel):
     """Public response contract for the Whittle planning agent."""
 
     status: PlanningAgentStatus
+    phase: PlanningAgentPhase = "idle"
     assistant_message: str
+    summary: str | None = None
     scenario_plan: ScenarioPlan | None = None
     trace_events: list[TraceEvent] = Field(default_factory=list)
     model: str

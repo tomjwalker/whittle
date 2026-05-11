@@ -3,8 +3,11 @@
 import { useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowRight,
+  CircleHelp,
   CheckCircle2,
   FileCode2,
+  ListChecks,
   Send,
   Terminal,
   Zap
@@ -29,7 +32,9 @@ type ScenarioPlan = {
 
 type AgentResponse = {
   status: string;
+  phase: string;
   assistant_message: string;
+  summary?: string | null;
   scenario_plan: ScenarioPlan | null;
   trace_events: TraceEvent[];
   model: string;
@@ -41,6 +46,8 @@ type ChatTurn = {
   id: string;
   user: string;
   assistant: string;
+  nextActions?: string[];
+  status?: string;
 };
 
 type ConversationMessage = {
@@ -190,7 +197,12 @@ export default function Home() {
       setTurns((existing) =>
         existing.map((turn) =>
           turn.id === turnId
-            ? { ...turn, assistant: event.response?.assistant_message ?? turn.assistant }
+            ? {
+                ...turn,
+                assistant: event.response?.assistant_message ?? turn.assistant,
+                nextActions: event.response?.next_actions ?? [],
+                status: event.response?.status
+              }
             : turn
         )
       );
@@ -248,12 +260,28 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            turns.map((turn) => (
+            turns.map((turn, index) => (
               <div className="turn" key={turn.id}>
                 <div className="message user">{turn.user}</div>
                 <div className="message agent">
                   {turn.assistant || (loading ? "Working..." : "")}
                 </div>
+                {index === turns.length - 1 && turn.nextActions?.length ? (
+                  <div className="quick-actions">
+                    {turn.nextActions.map((action) => (
+                      <button
+                        className="quick-action"
+                        key={action}
+                        type="button"
+                        disabled={loading}
+                        onClick={() => submit(action)}
+                      >
+                        <ArrowRight size={14} />
+                        <span>{action}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ))
           )}
@@ -270,6 +298,7 @@ export default function Home() {
             <textarea
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
+              onInput={(event) => setPrompt(event.currentTarget.value)}
               placeholder="Describe the CFD case..."
             />
             <button className="command-button" type="submit" disabled={loading || !prompt.trim()}>
@@ -305,9 +334,43 @@ export default function Home() {
             {statusClass === "ok" ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
             {response?.status ?? "idle"}
           </p>
+          <p className="phase-label">{response?.phase ?? "waiting_for_request"}</p>
         </div>
 
         <div className="inspector-scroll">
+          <section className="section compact">
+            <h3>Agent Actions</h3>
+            <TraceRail trace={trace} />
+          </section>
+
+          <section className="section">
+            <h3>Current Step</h3>
+            <p className="inspector-copy">
+              {response?.summary ??
+                "Ask for a drone CFD scenario and I will help turn it into a typed case."}
+            </p>
+            <div className="kv">
+              <span>Source</span>
+              <strong>{response?.source ?? "not_started"}</strong>
+            </div>
+            {response?.next_actions?.length ? (
+              <div className="suggestion-stack">
+                {response.next_actions.map((action) => (
+                  <button
+                    className="suggestion-button"
+                    key={action}
+                    type="button"
+                    disabled={loading}
+                    onClick={() => submit(action)}
+                  >
+                    <CircleHelp size={14} />
+                    <span>{action}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </section>
+
           <section className="section">
             <h3>Trace</h3>
             <div className="trace-list">
@@ -327,8 +390,38 @@ export default function Home() {
                 <span>{label}</span>
                 <strong>{value}</strong>
               </div>
-            )) : <p className="small-note">No typed spec yet.</p>}
+            )) : (
+              <div className="empty-spec">
+                <ListChecks size={16} />
+                <span>
+                  No writeable typed spec yet. The agent is still scoping, coaching, or
+                  asking for missing inputs.
+                </span>
+              </div>
+            )}
           </section>
+
+          {response?.scenario_plan?.clarifying_questions?.length ? (
+            <section className="section">
+              <h3>Clarifying Questions</h3>
+              <ul className="list">
+                {response.scenario_plan.clarifying_questions.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
+          {response?.scenario_plan?.missing_information?.length ? (
+            <section className="section">
+              <h3>Missing Information</h3>
+              <ul className="list">
+                {response.scenario_plan.missing_information.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
 
           <section className="section">
             <h3>Assumptions</h3>
@@ -349,8 +442,10 @@ export default function Home() {
           </section>
 
           <section className="section">
-            <h3>Raw Contract</h3>
-            <pre>{JSON.stringify(response?.scenario_plan ?? {}, null, 2)}</pre>
+            <details className="raw-contract">
+              <summary>Raw Contract</summary>
+              <pre>{JSON.stringify(response?.scenario_plan ?? {}, null, 2)}</pre>
+            </details>
           </section>
         </div>
 
@@ -366,4 +461,51 @@ export default function Home() {
       </aside>
     </main>
   );
+}
+
+function TraceRail({ trace }: { trace: TraceEvent[] }) {
+  if (!trace.length) {
+    return <p className="small-note">No agent actions yet.</p>;
+  }
+
+  const important = trace.filter((item) =>
+    [
+      "RequestReceived",
+      "AgentStarted",
+      "DeterministicDraftCreated",
+      "FieldsExtracted",
+      "ValidationRun",
+      "ClarificationNeeded",
+      "HumanReviewNeeded",
+      "RequestOutOfScope",
+      "AgentOutputPlanned",
+      "AgentError"
+    ].includes(item.event_type)
+  );
+
+  return (
+    <div className="trace-rail">
+      {important.map((item, index) => (
+        <span className="trace-chip" key={`${item.event_type}-${index}`}>
+          {labelTrace(item.event_type)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function labelTrace(eventType: string) {
+  const labels: Record<string, string> = {
+    RequestReceived: "Received",
+    AgentStarted: "Started",
+    DeterministicDraftCreated: "Drafted",
+    FieldsExtracted: "Extracted",
+    ValidationRun: "Validated",
+    ClarificationNeeded: "Clarify",
+    HumanReviewNeeded: "Review",
+    RequestOutOfScope: "Blocked",
+    AgentOutputPlanned: "Responded",
+    AgentError: "Error"
+  };
+  return labels[eventType] ?? eventType;
 }

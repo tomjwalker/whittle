@@ -7,10 +7,10 @@ roll/pitch/yaw attitude transforms for the legacy quadcopter case.
 
 ## Status
 
-- State: V0/V0.1 complete; V0.2 B/C1 smoke checks passed; V1 deterministic
-  evals and V2 planning-agent scaffold started
+- State: V0/V0.1 complete; V0.2 B/C smoke checks passed; V1 deterministic
+  evals and V2 interview-style planning-agent scaffold started
 - Owner: Tom / Codex
-- Last updated: 2026-05-10
+- Last updated: 2026-05-11
 
 ## Acceptance Criteria
 
@@ -34,6 +34,8 @@ roll/pitch/yaw attitude transforms for the legacy quadcopter case.
   API key is configured.
 - FastAPI exposes local planning and write-case endpoints.
 - Next.js local UI can stream visible trace events and inspect the typed spec.
+- Planning-agent responses separate conversation phase, coaching, suggested
+  replies, and writeable typed specs.
 
 ## Workstreams
 
@@ -73,8 +75,9 @@ roll/pitch/yaw attitude transforms for the legacy quadcopter case.
 2. Run the deterministic eval harness after every planner/schema change.
 3. Add an OpenAI API key locally and smoke-test `whittle agent-plan` without
    deterministic fallback.
-4. Start the FastAPI + Next.js UI and iterate on the interview-style planning
-   loop.
+4. Continue improving the interview loop: preserve session state across turns,
+   support trim/sweep generation as first-class output, and add scenario cards
+   for cruise, attitude, MRF downwash, and future yaw-in-place modelling.
 
 ## Validation
 
