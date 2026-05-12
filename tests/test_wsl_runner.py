@@ -15,6 +15,9 @@ def test_wsl_runner_includes_toposet_when_case_has_toposet_dict(tmp_path: Path) 
     )
 
     assert "snappyHexMesh -overwrite" in script
+    assert "WHITTLE_CASE_NAME=case" in script
+    assert 'BASE="$HOME/OpenFOAM/cases/$WHITTLE_CASE_NAME"' in script
+    assert "\nCASE_NAME=" not in script
     assert "run_whittle_step topoSet topoSet" in script
     assert "run_whittle_step checkMesh checkMesh" in script
     assert "run_whittle_step simpleFoam simpleFoam" in script

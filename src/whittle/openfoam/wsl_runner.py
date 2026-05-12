@@ -30,11 +30,12 @@ def build_wsl_openfoam_script(config: OpenFOAMRunConfig) -> str:
 
     command_block = "\n".join(_openfoam_step(command) for command in commands)
     return (
-        "set -euo pipefail\n"
+        "set -eo pipefail\n"
         f"source {shlex.quote(config.bashrc)}\n"
+        "set -u\n"
         f"SRC=$(wslpath -a {shlex.quote(str(case_dir))})\n"
-        f"CASE_NAME={shlex.quote(config.case_name)}\n"
-        'BASE="$HOME/OpenFOAM/cases/$CASE_NAME"\n'
+        f"WHITTLE_CASE_NAME={shlex.quote(config.case_name)}\n"
+        'BASE="$HOME/OpenFOAM/cases/$WHITTLE_CASE_NAME"\n'
         'TARGET="$BASE"\n'
         "N=1\n"
         'while [ -e "$TARGET" ]; do TARGET="${BASE}_run${N}"; N=$((N + 1)); done\n'
@@ -73,11 +74,15 @@ async def stream_wsl_openfoam_run(config: OpenFOAMRunConfig) -> AsyncIterator[di
         "-d",
         config.distro,
         "bash",
-        "-lc",
-        script,
+        "-s",
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
+    assert process.stdin is not None
+    process.stdin.write(script.encode("utf-8"))
+    await process.stdin.drain()
+    process.stdin.close()
     assert process.stdout is not None
     async for raw_line in process.stdout:
         line = raw_line.decode("utf-8", errors="replace").rstrip()
