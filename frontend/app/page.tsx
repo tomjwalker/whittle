@@ -258,7 +258,7 @@ export default function Home() {
   }
 
   async function runOpenFOAM() {
-    const activeCaseName = String(spec?.case_name ?? caseName || "ui_planned_case");
+    const activeCaseName = String(spec?.case_name ?? (caseName || "ui_planned_case"));
     setRunStatus("Running OpenFOAM in WSL...");
     setRunLines([]);
     setOpenfoamRunning(true);
