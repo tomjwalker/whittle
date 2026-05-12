@@ -19,9 +19,29 @@ type TraceEvent = {
   data?: Record<string, unknown>;
 };
 
+type ScenarioIntent = {
+  objective: string;
+  state: string;
+  rotor_strategy: string;
+  environment: string;
+  confidence: number;
+  requested_velocity_mps?: number | null;
+  requested_yaw_rate_deg_s?: number | null;
+  requested_roll_deg?: number | null;
+  requested_pitch_deg?: number | null;
+  requested_yaw_deg?: number | null;
+  requested_mrf_omega_rad_s?: number | null;
+  inferred_fields: Record<string, string | number | boolean>;
+  missing_information: string[];
+  assumptions: string[];
+  warnings: string[];
+  recommended_next_step?: string | null;
+};
+
 type ScenarioPlan = {
   user_request: string;
   scenario_type: string;
+  intent: ScenarioIntent | null;
   spec: Record<string, unknown> | null;
   assumptions: string[];
   warnings: string[];
@@ -55,12 +75,12 @@ type ConversationMessage = {
   content: string;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_WHITTLE_API_URL ?? "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_WHITTLE_API_URL ?? "http://127.0.0.1:8000";
 
 const STARTERS = [
   "Set up cruise at 5 m/s with spinning propellers.",
   "Run pitch 10 degrees at 5 m/s with MRF rotors.",
-  "I want to simulate hover takeoff from a floor.",
+  "Set up static hover at 0 m/s with MRF rotors at 1000 rad/s.",
   "Make this drone more aerodynamic."
 ];
 
@@ -73,10 +93,16 @@ export default function Home() {
   const [trace, setTrace] = useState<TraceEvent[]>([]);
   const [response, setResponse] = useState<AgentResponse | null>(null);
   const [writeStatus, setWriteStatus] = useState<string | null>(null);
+  const [caseWritten, setCaseWritten] = useState(false);
+  const [runStatus, setRunStatus] = useState<string | null>(null);
+  const [runLines, setRunLines] = useState<string[]>([]);
+  const [openfoamRunning, setOpenfoamRunning] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const spec = response?.scenario_plan?.spec ?? null;
+  const intent = response?.scenario_plan?.intent ?? null;
   const canWrite = Boolean(spec && response?.status === "ready_for_human_review");
+  const canRunOpenFOAM = caseWritten && !loading && !openfoamRunning;
   const statusClass = response?.status === "ready_for_human_review"
     ? "ok"
     : response?.status === "out_of_scope" || response?.status === "error"
@@ -109,9 +135,13 @@ export default function Home() {
     setPrompt("");
     setLoading(true);
     setWriteStatus(null);
+    setCaseWritten(false);
+    setRunStatus(null);
+    setRunLines([]);
+    setOpenfoamRunning(false);
     setTrace([]);
-    setResponse(null);
     const conversationHistory = buildConversationHistory(turns);
+    const previousPlan = response?.scenario_plan ?? null;
 
     try {
       const res = await fetch(`${API_BASE}/api/plan/stream`, {
@@ -121,7 +151,8 @@ export default function Home() {
           message: trimmed,
           case_name: caseName || "ui_planned_case",
           deterministic,
-          conversation_history: conversationHistory
+          conversation_history: conversationHistory,
+          previous_plan: previousPlan
         }),
         signal: controller.signal
       });
@@ -223,6 +254,56 @@ export default function Home() {
     }
     const payload = await res.json();
     setWriteStatus(`Written: ${payload.case_name} (${payload.files_written.length} files)`);
+    setCaseWritten(true);
+  }
+
+  async function runOpenFOAM() {
+    const activeCaseName = String(spec?.case_name ?? caseName || "ui_planned_case");
+    setRunStatus("Running OpenFOAM in WSL...");
+    setRunLines([]);
+    setOpenfoamRunning(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/openfoam/run/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ case_name: activeCaseName })
+      });
+      if (!res.ok || !res.body) {
+        setRunStatus(`Run failed to start: HTTP ${res.status}`);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          handleRunLine(line);
+        }
+      }
+      if (buffer.trim()) {
+        handleRunLine(buffer);
+      }
+    } finally {
+      setOpenfoamRunning(false);
+    }
+  }
+
+  function handleRunLine(line: string) {
+    if (!line.trim()) return;
+    const event = JSON.parse(line) as { type: string; message: string };
+    if (["run_start", "step_start", "step_done", "target", "done"].includes(event.type)) {
+      setRunStatus(event.message);
+    }
+    if (event.type === "run_complete" || event.type === "run_failed") {
+      setRunStatus(event.message);
+    }
+    setRunLines((existing) => [...existing.slice(-240), `${event.type}: ${event.message}`]);
   }
 
   return (
@@ -344,6 +425,47 @@ export default function Home() {
           </section>
 
           <section className="section">
+            <h3>Intent</h3>
+            {intent ? (
+              <>
+                <div className="intent-header">
+                  <span className={`intent-state ${intentStateClass(intent.state)}`}>
+                    {labelIntentState(intent.state)}
+                  </span>
+                  <span className="confidence">
+                    {Math.round((intent.confidence ?? 0) * 100)}% confidence
+                  </span>
+                </div>
+                <div className="intent-grid">
+                  <IntentValue label="Objective" value={intent.objective} />
+                  <IntentValue label="Rotor strategy" value={intent.rotor_strategy} />
+                  <IntentValue label="Environment" value={intent.environment} />
+                  <IntentValue
+                    label="Velocity"
+                    value={formatOptionalNumber(intent.requested_velocity_mps, "m/s")}
+                  />
+                  <IntentValue
+                    label="Yaw rate"
+                    value={formatOptionalNumber(intent.requested_yaw_rate_deg_s, "deg/s")}
+                  />
+                  <IntentValue
+                    label="Omega"
+                    value={formatOptionalNumber(intent.requested_mrf_omega_rad_s, "rad/s")}
+                  />
+                </div>
+                {intent.recommended_next_step ? (
+                  <p className="inspector-copy">{intent.recommended_next_step}</p>
+                ) : null}
+              </>
+            ) : (
+              <p className="small-note">
+                No intent draft yet. The first agent pass will infer the user objective before
+                producing a hard case contract.
+              </p>
+            )}
+          </section>
+
+          <section className="section">
             <h3>Current Step</h3>
             <p className="inspector-copy">
               {response?.summary ??
@@ -454,9 +576,22 @@ export default function Home() {
             <FileCode2 size={17} />
             Write case
           </button>
+          <button
+            className="command-button secondary"
+            type="button"
+            disabled={!canRunOpenFOAM}
+            onClick={runOpenFOAM}
+          >
+            <Terminal size={17} />
+            Mesh/run
+          </button>
           <p className="small-note">
             {writeStatus ?? "Files are written under outputs/agent_cases after review."}
           </p>
+          {runStatus ? <p className="small-note">{runStatus}</p> : null}
+          {runLines.length ? (
+            <pre className="run-log">{runLines.slice(-80).join("\n")}</pre>
+          ) : null}
         </div>
       </aside>
     </main>
@@ -474,6 +609,8 @@ function TraceRail({ trace }: { trace: TraceEvent[] }) {
       "AgentStarted",
       "DeterministicDraftCreated",
       "FieldsExtracted",
+      "IntentDrafted",
+      "PreviousPlanApplied",
       "ValidationRun",
       "ClarificationNeeded",
       "HumanReviewNeeded",
@@ -500,6 +637,8 @@ function labelTrace(eventType: string) {
     AgentStarted: "Started",
     DeterministicDraftCreated: "Drafted",
     FieldsExtracted: "Extracted",
+    IntentDrafted: "Intent",
+    PreviousPlanApplied: "Memory",
     ValidationRun: "Validated",
     ClarificationNeeded: "Clarify",
     HumanReviewNeeded: "Review",
@@ -508,4 +647,35 @@ function labelTrace(eventType: string) {
     AgentError: "Error"
   };
   return labels[eventType] ?? eventType;
+}
+
+function IntentValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="intent-value">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function formatOptionalNumber(value: number | null | undefined, unit: string) {
+  if (value === null || value === undefined) return "unset";
+  return `${value} ${unit}`;
+}
+
+function intentStateClass(state: string) {
+  if (state === "ready_for_spec") return "set";
+  if (state === "blocked") return "blocked";
+  if (state === "needs_clarification") return "proposed";
+  return "draft";
+}
+
+function labelIntentState(state: string) {
+  const labels: Record<string, string> = {
+    ready_for_spec: "ready for spec",
+    needs_clarification: "needs clarification",
+    blocked: "blocked",
+    proposed: "proposed"
+  };
+  return labels[state] ?? state;
 }

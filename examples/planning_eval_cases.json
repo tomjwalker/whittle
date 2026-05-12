@@ -4,14 +4,22 @@
     "request": "Set up external cruise over the legacy quadcopter at 10 m/s.",
     "expected_scenario_type": "external_cruise",
     "expect_spec": true,
-    "expected_rotor_model": "none"
+    "expected_rotor_model": "mrf"
   },
   {
-    "name": "mrf_cruise",
+    "name": "rotor_disk_downwash_cruise",
     "request": "Simulate cruise at 5 m/s with spinning propellers and downwash.",
     "expected_scenario_type": "external_cruise",
     "expect_spec": true,
-    "expected_rotor_model": "mrf"
+    "expected_rotor_model": "rotor_disk"
+  },
+  {
+    "name": "static_hover_no_floor_mrf",
+    "request": "Set up hover-in-place with no floor, zero freestream, and rotors at 1000 rad/s.",
+    "expected_scenario_type": "static_hover_mrf",
+    "expect_spec": true,
+    "expected_rotor_model": "mrf",
+    "expected_warning_contains": ["Static MRF hover"]
   },
   {
     "name": "pitch_attitude",
@@ -65,16 +73,18 @@
   {
     "name": "spin_in_place_later",
     "request": "I'd like to simulate my drone spinning in place.",
-    "expected_scenario_type": "hover_or_takeoff",
-    "expect_spec": false,
-    "expected_missing_contains": ["Yaw-in-place"]
+    "expected_scenario_type": "motion_proxy",
+    "expect_spec": true,
+    "expected_rotor_model": "mrf",
+    "expected_warning_contains": ["not imposed"]
   },
   {
     "name": "yawing_in_place_later",
     "request": "I want to simulate my drone yawing in place.",
-    "expected_scenario_type": "hover_or_takeoff",
-    "expect_spec": false,
-    "expected_missing_contains": ["Yaw-in-place"]
+    "expected_scenario_type": "motion_proxy",
+    "expect_spec": true,
+    "expected_rotor_model": "mrf",
+    "expected_warning_contains": ["not imposed"]
   },
   {
     "name": "unsupported_weapon",

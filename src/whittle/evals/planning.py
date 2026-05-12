@@ -99,6 +99,8 @@ def _run_case(case: PlanningEvalCase) -> PlanningEvalResult:
         failures=failures,
         observed={
             "scenario_type": plan.scenario_type,
+            "intent_objective": plan.intent.objective if plan.intent else None,
+            "intent_state": plan.intent.state if plan.intent else None,
             "has_spec": bool(plan.spec),
             "rotor_model": plan.spec.rotor_model if plan.spec else None,
             "missing_information": plan.missing_information,

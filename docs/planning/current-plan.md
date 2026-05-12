@@ -7,8 +7,9 @@ roll/pitch/yaw attitude transforms for the legacy quadcopter case.
 
 ## Status
 
-- State: V0/V0.1 complete; V0.2 B/C smoke checks passed; V1 deterministic
-  evals and V2 interview-style planning-agent scaffold started
+- State: V0/V0.1 complete; V0.2 B/C smoke checks passed; V1/V2
+  interview-agent scaffold now has intent, typed memory, UI timeline, optional
+  Logfire wiring, and a first rotor-disk source-term fidelity step
 - Owner: Tom / Codex
 - Last updated: 2026-05-11
 
@@ -36,6 +37,25 @@ roll/pitch/yaw attitude transforms for the legacy quadcopter case.
 - Next.js local UI can stream visible trace events and inspect the typed spec.
 - Planning-agent responses separate conversation phase, coaching, suggested
   replies, and writeable typed specs.
+- Planner supports a clearly caveated static hover MRF smoke case at
+  zero freestream, while keeping floor/takeoff/ground-effect requests blocked.
+- Planner emits a `ScenarioIntent` before the hard `SimulationCaseSpec`.
+- FastAPI/UI requests can pass the previous structured plan for follow-up
+  refinements.
+- UI shows intent state and visible action chips without exposing hidden
+  chain-of-thought.
+- Optional Logfire instrumentation is documented and env-gated.
+- Planning agent prompt is stored outside Python code and instructs expert-led,
+  layperson-friendly, max-two-choice coaching.
+- A deterministic performance-guidance table/tool suggests baseline pitch,
+  signed MRF rotor speeds, and future sweep values without claiming solved trim.
+- A deterministic motion-command tool maps `u/v/w`, attitude, and
+  `roll_dot/pitch_dot/yaw_dot` to bounded per-rotor MRF speeds for caveated
+  bespoke manoeuvre proxy cases.
+- CLI supports `--rotor-model rotor-disk` and writes `system/fvOptions`
+  `rotorDisk` source terms for stronger downwash smoke tests.
+- FastAPI/Next.js expose a human-triggered WSL OpenFOAM run stream for reviewed
+  cases.
 
 ## Workstreams
 
@@ -54,7 +74,8 @@ roll/pitch/yaw attitude transforms for the legacy quadcopter case.
 
 - The local hexacopter STL is large and may require future splitting or
   decimation before meshing.
-- OpenFOAM execution is available in WSL but is not yet automated from Whittle.
+- OpenFOAM execution is available in WSL and now has a minimal fixed-command
+  runner. It is intentionally HITL and local-only, not a general terminal.
 - First `legacy-box` mesh completed but `checkMesh` failed one quality check:
   17 highly skew faces, max skewness about 8.43. This is acceptable for V0
   smoke but not a validated CFD-quality mesh.
@@ -69,15 +90,15 @@ roll/pitch/yaw attitude transforms for the legacy quadcopter case.
 
 ## Next Steps
 
-1. Smoke-test `legacy_box_mrf_combined_smoke` in OpenFOAM. If it passes, treat
-   roll/yaw individual cases as optional debugging cases rather than mandatory
-   Sunday blockers.
-2. Run the deterministic eval harness after every planner/schema change.
-3. Add an OpenAI API key locally and smoke-test `whittle agent-plan` without
-   deterministic fallback.
-4. Continue improving the interview loop: preserve session state across turns,
-   support trim/sweep generation as first-class output, and add scenario cards
-   for cruise, attitude, MRF downwash, and future yaw-in-place modelling.
+1. Use `docs/planning/interview-sprint-plan.md` as the Monday-to-Wednesday
+   priority guide.
+2. Add more eval fixtures for lay-user multi-turn conversations and confirm the
+   new expert-led prompt reduces turns.
+3. Prepare the Anima and PhysicsX answer bank around this architecture.
+4. Run the deterministic eval harness after every planner/schema change.
+5. Inspect the rotor-disk hover case for downwash sign/strength, then decide
+   whether the next fidelity step is log parsing, stronger source calibration,
+   AMI/sliding mesh, or better CAD.
 
 ## Validation
 
@@ -98,3 +119,12 @@ roll/pitch/yaw attitude transforms for the legacy quadcopter case.
   planning.
 - Unit tests cover deterministic eval fixtures, deterministic agent fallback,
   and FastAPI planning endpoints.
+- Unit tests cover `ScenarioIntent`, previous-plan follow-up memory, and API
+  previous-plan requests.
+- Frontend lint/build and Playwright UI smoke test pass for the action timeline
+  and no-stale-spec behavior.
+- Unit tests cover performance-guidance interpolation, motion-command rotor
+  deltas, per-rotor MRF case writing, and prompt loading.
+- Unit tests cover rotor-disk case writing and the WSL run-command builder.
+- `outputs/legacy_box_rotor_disk_hover_t500` was generated for overnight
+  OpenFOAM testing.

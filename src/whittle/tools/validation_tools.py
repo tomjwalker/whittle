@@ -15,10 +15,18 @@ def validate_case_spec(spec: SimulationCaseSpec) -> tuple[list[str], list[str], 
     warnings: list[str] = []
     missing: list[str] = []
 
-    if spec.reference_velocity_mps <= 0:
+    if spec.reference_velocity_mps < 0:
+        missing.append("reference_velocity_mps must not be negative.")
+    elif spec.reference_velocity_mps == 0 and not _is_zero_freestream_rotor_proxy(spec):
         missing.append("reference_velocity_mps must be positive.")
     else:
-        checks.append("Reference velocity is positive.")
+        if spec.reference_velocity_mps == 0:
+            checks.append(
+                "Reference velocity is zero for a static/differential MRF proxy "
+                "or rotor-disk proxy case."
+            )
+        else:
+            checks.append("Reference velocity is positive.")
         envelope_checks, envelope_warnings, envelope_missing = validate_physics_envelope(spec)
         checks.extend(envelope_checks)
         warnings.extend(envelope_warnings)
@@ -45,6 +53,16 @@ def validate_case_spec(spec: SimulationCaseSpec) -> tuple[list[str], list[str], 
                 checks.append("MRF cell-zone names are unique.")
         else:
             missing.append("MRF rotor model requested but no MRF zones were defined.")
+    elif spec.rotor_model == "rotor_disk":
+        if spec.rotor_disk_sources:
+            checks.append("Rotor-disk model includes at least one fvOptions source.")
+            cell_zones = [source.cell_zone for source in spec.rotor_disk_sources]
+            if len(cell_zones) != len(set(cell_zones)):
+                missing.append("Rotor-disk cell-zone names must be unique.")
+            else:
+                checks.append("Rotor-disk cell-zone names are unique.")
+        else:
+            missing.append("Rotor-disk model requested but no rotor-disk sources were defined.")
 
     for surface in spec.geometry.surfaces:
         if not surface.source_path.exists():
@@ -65,6 +83,11 @@ def validate_case_spec(spec: SimulationCaseSpec) -> tuple[list[str], list[str], 
     if spec.rotor_model == "mrf":
         warnings.append(
             "MRF zones are generated from legacy reference data and require mesh validation."
+        )
+    elif spec.rotor_model == "rotor_disk":
+        warnings.append(
+            "Rotor-disk fvOptions are heuristic source terms; check sign, source strength, "
+            "and downwash in ParaView before trusting force numbers."
         )
     else:
         warnings.append(
@@ -99,3 +122,16 @@ def _deduplicate(items: list[str]) -> list[str]:
             seen.add(item)
             output.append(item)
     return output
+
+
+def _is_zero_freestream_rotor_proxy(spec: SimulationCaseSpec) -> bool:
+    return (
+        spec.flow_regime
+        in {
+            "steady_incompressible_static_mrf_hover",
+            "steady_incompressible_motion_proxy_mrf",
+            "steady_incompressible_static_rotor_disk_hover",
+            "steady_incompressible_motion_proxy_rotor_disk",
+        }
+        and spec.rotor_model in {"mrf", "rotor_disk"}
+    )

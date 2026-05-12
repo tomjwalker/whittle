@@ -13,9 +13,18 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from whittle.agents.prompt_loader import load_cfd_planning_prompts
 from whittle.models.agent import PlanningAgentPhase, PlanningAgentResponse
 from whittle.models.planning import ScenarioPlan
 from whittle.models.reports import TraceEvent
+from whittle.tools.performance_guidance import (
+    MotionRotorCommand,
+    PerformanceGuidance,
+    get_cruise_performance_guidance,
+)
+from whittle.tools.performance_guidance import (
+    get_motion_rotor_command as compute_motion_rotor_command,
+)
 from whittle.tools.physics_envelope import DEFAULT_PHYSICS_ENVELOPE, validate_physics_envelope
 from whittle.tools.scenario_planner import plan_case_request
 
@@ -25,40 +34,7 @@ _SPEED_RE = re.compile(
     r"(?P<value>\d+(?:\.\d+)?)\s*(?:m/s|metres?\s+per\s+second|meters?\s+per\s+second)",
     re.IGNORECASE,
 )
-
-_SYSTEM_PROMPT = """You are Whittle, a CFD setup planning agent for an educational drone
-OpenFOAM demo.
-
-Your job is to interview the user until a physically plausible, civil, steady
-incompressible drone CFD setup can be expressed as typed state.
-
-Use the deterministic tools as the authority. Do not invent OpenFOAM file
-contents, rotor coordinates, solver settings, or supported scenarios. If the
-tools say a request is missing information or out of scope, ask concise
-clarifying questions. Do not expose private chain-of-thought. Use visible trace
-events for auditable actions such as checking the physics envelope, extracting
-fields, validating the spec, or needing human review.
-
-Current scope:
-- legacy-box quadcopter geometry
-- external cruise/attitude cases
-- optional MRF rotor approximation
-- steady incompressible simpleFoam setup
-- no automatic solver execution
-- no hover/takeoff/ground-effect cases yet
-- no weapons, targeting, evasion, or mission optimisation
-
-Conversation policy:
-- Separate coaching from case writing. Not every user utterance should become
-  a SimulationCaseSpec.
-- For lay requests, explain the nearest supported workflow, then ask one
-  concrete next question or offer two to four supported next actions.
-- For yawing/spinning in place, explain that real yaw uses differential rotor
-  torque, but mark it as a future manoeuvre workflow outside the current
-  steady simpleFoam writer.
-- For trim questions, offer a pitch/rotor-speed sweep, not a claimed solved
-  trim state.
-"""
+_ZERO_SPEED_RE = re.compile(r"(?<!\d)0(?:\.0+)?\s*m/s", re.IGNORECASE)
 
 
 class AgentPlanningDraft(BaseModel):
@@ -128,6 +104,7 @@ async def run_planning_agent(
     thinking: str | bool | None = None,
     deterministic: bool = False,
     conversation_history: list[ConversationMessage] | None = None,
+    previous_plan: ScenarioPlan | None = None,
 ) -> PlanningAgentResponse:
     """Run the planning agent, falling back to deterministic planning when needed."""
 
@@ -141,12 +118,13 @@ async def run_planning_agent(
             user_request,
             case_name=case_name,
             model=model_name,
+            previous_plan=previous_plan,
         )
 
     try:
         agent = _build_agent(model_name, thinking_setting)
         result = await agent.run(
-            _agent_prompt(user_request, case_name, conversation_history),
+            _agent_prompt(user_request, case_name, conversation_history, previous_plan),
             model_settings={"thinking": thinking_setting},
         )
         draft = AgentPlanningDraft.model_validate(result.output)
@@ -154,6 +132,7 @@ async def run_planning_agent(
             user_request,
             case_name=case_name,
             model=model_name,
+            previous_plan=previous_plan,
         )
         return _apply_model_draft(response, draft, model_name)
     except Exception as exc:  # pragma: no cover - exercised only with live provider failures.
@@ -161,6 +140,7 @@ async def run_planning_agent(
             user_request,
             case_name=case_name,
             model=model_name,
+            previous_plan=previous_plan,
         )
         fallback.status = "error"
         fallback.phase = "error"
@@ -186,6 +166,7 @@ async def stream_planning_agent(
     thinking: str | bool | None = None,
     deterministic: bool = False,
     conversation_history: list[ConversationMessage] | None = None,
+    previous_plan: ScenarioPlan | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield NDJSON-friendly visible events for the planning UI."""
 
@@ -210,6 +191,7 @@ async def stream_planning_agent(
             user_request,
             case_name=case_name,
             model=model_name,
+            previous_plan=previous_plan,
         )
         yield {"type": "complete", "response": response.model_dump(mode="json")}
         return
@@ -226,6 +208,7 @@ async def stream_planning_agent(
         thinking=thinking_setting,
         deterministic=False,
         conversation_history=conversation_history,
+        previous_plan=previous_plan,
     )
     yield {"type": "complete", "response": response.model_dump(mode="json")}
 
@@ -235,10 +218,25 @@ def build_deterministic_agent_response(
     *,
     case_name: str = "agent_planned_case",
     model: str = DEFAULT_AGENT_MODEL,
+    previous_plan: ScenarioPlan | None = None,
 ) -> PlanningAgentResponse:
     """Wrap deterministic planning in the same contract as the model-backed agent."""
 
-    plan = plan_case_request(user_request, case_name=case_name)
+    contextual_request = _contextualise_request(user_request, previous_plan)
+    plan = plan_case_request(contextual_request, case_name=case_name)
+    if contextual_request != user_request:
+        plan.user_request = user_request
+        plan.trace_events.insert(
+            1,
+            TraceEvent(
+                event_type="PreviousPlanApplied",
+                message="Previous structured plan was used to interpret a follow-up request.",
+                data={
+                    "original_request": user_request,
+                    "contextual_request": contextual_request,
+                },
+            ),
+        )
     status = _status_from_plan(plan)
     trace_events = [
         TraceEvent(
@@ -247,6 +245,7 @@ def build_deterministic_agent_response(
             data={"case_name": case_name},
         ),
         *plan.trace_events,
+        *_performance_guidance_trace_events(plan),
         _terminal_trace_event(status),
     ]
     return PlanningAgentResponse(
@@ -272,7 +271,7 @@ def _build_agent(model: str, thinking: str | bool):
 
     agent = Agent(
         model,
-        instructions=_SYSTEM_PROMPT,
+        instructions=load_cfd_planning_prompts().system_prompt,
         output_type=AgentPlanningDraft,
         model_settings={"thinking": thinking},
     )
@@ -288,6 +287,55 @@ def _build_agent(model: str, thinking: str | bool):
         """Return the current machine-checkable CFD physics envelope."""
 
         return DEFAULT_PHYSICS_ENVELOPE.model_dump(mode="json")
+
+    @agent.tool_plain
+    def get_performance_guidance(
+        velocity_mps: float = 5.0,
+        yaw_rate_deg_s: float | None = None,
+    ) -> PerformanceGuidance:
+        """Return heuristic pitch and signed rotor-speed defaults for lay planning.
+
+        Use this before giving numeric recommendations for cruise speed, pitch,
+        trim, MRF omega, or future yaw manoeuvre proxies. The values are
+        transparent table/interpolation guidance, not solved trim.
+        """
+
+        return get_cruise_performance_guidance(
+            velocity_mps,
+            yaw_rate_deg_s=yaw_rate_deg_s,
+        )
+
+    @agent.tool_plain
+    def get_motion_rotor_command(
+        u_mps: float = 0.0,
+        v_mps: float = 0.0,
+        w_mps: float = 0.0,
+        roll_deg: float = 0.0,
+        pitch_deg: float | None = None,
+        yaw_deg: float = 0.0,
+        roll_rate_deg_s: float = 0.0,
+        pitch_rate_deg_s: float = 0.0,
+        yaw_rate_deg_s: float = 0.0,
+    ) -> MotionRotorCommand:
+        """Return a bounded heuristic per-rotor command for bespoke manoeuvres.
+
+        Use this when the user asks about yawing, rolling, pitching, spinning,
+        side-slip, vertical motion, or combined attitude-rate manoeuvres. The
+        returned signed MRF rotor speeds are a steady CFD proxy, not direct
+        body angular-rate simulation or solved trim.
+        """
+
+        return compute_motion_rotor_command(
+            u_mps=u_mps,
+            v_mps=v_mps,
+            w_mps=w_mps,
+            roll_deg=roll_deg,
+            pitch_deg=pitch_deg,
+            yaw_deg=yaw_deg,
+            roll_rate_deg_s=roll_rate_deg_s,
+            pitch_rate_deg_s=pitch_rate_deg_s,
+            yaw_rate_deg_s=yaw_rate_deg_s,
+        )
 
     @agent.tool_plain
     def draft_scenario_plan(
@@ -328,22 +376,14 @@ def _build_agent(model: str, thinking: str | bool):
     def get_trim_guidance(velocity_mps: float = 10.0) -> TrimGuidance:
         """Return conservative educational sweep guidance for a future trim workflow."""
 
-        if velocity_mps <= 6:
-            pitch_sweep = [0.0, 3.0, 6.0]
-            omega_sweep = [800.0, 1000.0, 1200.0]
-        elif velocity_mps <= 12:
-            pitch_sweep = [3.0, 6.0, 9.0, 12.0]
-            omega_sweep = [900.0, 1100.0, 1300.0]
-        else:
-            pitch_sweep = [6.0, 10.0, 14.0, 18.0]
-            omega_sweep = [1100.0, 1400.0, 1700.0]
+        guidance = get_cruise_performance_guidance(velocity_mps)
         return TrimGuidance(
             velocity_mps=velocity_mps,
-            pitch_sweep_deg=pitch_sweep,
-            omega_sweep_rad_s=omega_sweep,
+            pitch_sweep_deg=guidance.pitch_sweep_deg,
+            omega_sweep_rad_s=guidance.omega_sweep_rad_s,
             note=(
-                "This is not a solved trim state. It is a suggested sweep to find "
-                "force/moment balance in later tooling."
+                "This is not a solved trim state. It is table/interpolation guidance "
+                "for a future force/moment sweep."
             ),
         )
 
@@ -362,20 +402,15 @@ def _agent_prompt(
     user_request: str,
     case_name: str,
     conversation_history: list[ConversationMessage] | None = None,
+    previous_plan: ScenarioPlan | None = None,
 ) -> str:
+    runtime_prompt = load_cfd_planning_prompts().runtime_prompt
     return (
         f"Case name: {case_name}\n"
         f"{_format_history(conversation_history)}"
+        f"{_format_previous_plan(previous_plan)}"
         f"User request: {user_request}\n\n"
-        "First call classify_interaction. If should_draft_case is false, answer "
-        "as a coaching/interview step and do not claim files are ready. If it is "
-        "true, call draft_scenario_plan and then validate_scenario_request. For "
-        "trim, pitch, rotor-speed, yaw-in-place, or manoeuvre coaching questions, "
-        "call get_trim_guidance when useful. Return an AgentPlanningDraft. "
-        "Set status to ready_for_human_review only when a SimulationCaseSpec exists "
-        "and no blocking missing_information remains. If the user asks a question "
-        "or needs coaching, prefer needs_clarification and ask a concrete next "
-        "question instead of writing files."
+        f"{runtime_prompt}"
     )
 
 
@@ -389,6 +424,91 @@ def _format_history(history: list[ConversationMessage] | None) -> str:
         if content:
             lines.append(f"{item.role}: {content}")
     return "\n".join(lines) + "\n\n"
+
+
+def _format_previous_plan(plan: ScenarioPlan | None) -> str:
+    if plan is None:
+        return ""
+    fields = [
+        f"scenario_type={plan.scenario_type}",
+        f"status_intent={plan.intent.state if plan.intent else 'unknown'}",
+        f"objective={plan.intent.objective if plan.intent else 'unknown'}",
+    ]
+    if plan.spec is not None:
+        fields.extend(
+            [
+                f"velocity_mps={plan.spec.reference_velocity_mps:g}",
+                f"rotor_model={plan.spec.rotor_model}",
+                f"roll_deg={plan.spec.roll_angle_deg:g}",
+                f"pitch_deg={plan.spec.pitch_angle_deg:g}",
+                f"yaw_deg={plan.spec.yaw_angle_deg:g}",
+            ]
+        )
+    return "Previous structured plan: " + ", ".join(fields) + "\n\n"
+
+
+def _contextualise_request(
+    user_request: str,
+    previous_plan: ScenarioPlan | None,
+) -> str:
+    """Add prior typed state to simple follow-up edits for deterministic fallback."""
+
+    if previous_plan is None or previous_plan.spec is None:
+        return user_request
+
+    text = user_request.lower()
+    if any(
+        term in text
+        for term in (
+            "what scenarios",
+            "what can you help",
+            "what do you support",
+            "what are the supported",
+        )
+    ):
+        return user_request
+
+    modification_terms = (
+        "make it",
+        "faster",
+        "slower",
+        "same",
+        "keep",
+        "increase",
+        "decrease",
+        "instead",
+        "now",
+        "that",
+        "this",
+        "also",
+        "what kind of pitch",
+        "rotor speeds",
+    )
+    if not any(term in text for term in modification_terms):
+        return user_request
+
+    spec = previous_plan.spec
+    additions: list[str] = []
+    if _SPEED_RE.search(text) is None:
+        additions.append(f"{spec.reference_velocity_mps:g} m/s")
+    if not any(term in text for term in ("prop", "rotor", "mrf", "downwash", "swirl")):
+        additions.append("with MRF rotors" if spec.rotor_model == "mrf" else "without rotors")
+    if not any(axis in text for axis in ("roll", "pitch", "yaw")) and any(
+        value != 0
+        for value in (
+            spec.roll_angle_deg,
+            spec.pitch_angle_deg,
+            spec.yaw_angle_deg,
+        )
+    ):
+        additions.append(
+            "roll "
+            f"{spec.roll_angle_deg:g} deg, pitch {spec.pitch_angle_deg:g} deg, "
+            f"yaw {spec.yaw_angle_deg:g} deg"
+        )
+    if not additions:
+        return user_request
+    return f"{user_request} Context from previous accepted draft: {', '.join(additions)}."
 
 
 def _normalise_response(response: PlanningAgentResponse, model: str) -> PlanningAgentResponse:
@@ -465,14 +585,28 @@ def _classify_interaction(user_request: str) -> InteractionClassification:
             message="The request is outside the civil educational CFD scope.",
             suggested_replies=["Reframe this as civil external drone aerodynamics."],
         )
+    if _is_static_hover_text(text):
+        return InteractionClassification(
+            intent="case_request",
+            phase="case_drafting",
+            should_draft_case=True,
+            message="The user is asking for a static zero-freestream MRF hover smoke case.",
+            suggested_replies=[],
+        )
+    if _is_motion_proxy_text(text):
+        return InteractionClassification(
+            intent="case_request",
+            phase="case_drafting",
+            should_draft_case=True,
+            message=(
+                "The user is asking for a bespoke motion proxy that can be "
+                "represented with differential MRF rotor speeds."
+            ),
+            suggested_replies=[],
+        )
     if any(
         term in text
         for term in (
-            "yawing in place",
-            "yaw in place",
-            "spinning in place",
-            "spin in place",
-            "rotate in place",
             "hover",
             "takeoff",
             "take-off",
@@ -485,9 +619,8 @@ def _classify_interaction(user_request: str) -> InteractionClassification:
             should_draft_case=False,
             message="The user is asking for a manoeuvre outside the current steady writer.",
             suggested_replies=[
-                "Approximate it as 5 m/s cruise with MRF rotors.",
-                "Create a pitch 10 deg MRF smoke case instead.",
-                "Keep yaw-in-place as a future manoeuvre requirement.",
+                "Capture yaw as a future differential-rotor requirement.",
+                "Write a supported 5 m/s MRF cruise baseline instead.",
             ],
         )
     if any(
@@ -507,9 +640,8 @@ def _classify_interaction(user_request: str) -> InteractionClassification:
             should_draft_case=False,
             message="The user is asking for trim guidance rather than one case file.",
             suggested_replies=[
-                "Propose a 10 m/s pitch/omega sweep.",
-                "Write one smoke case at 10 m/s, pitch 6 deg, MRF 1100 rad/s.",
-                "Explain how trim would be evaluated from forces and moments.",
+                "Write one expert-default MRF baseline case.",
+                "Record a future pitch/omega trim-sweep requirement.",
             ],
         )
     if any(term in text for term in ("make it aero", "more aerodynamic", "better aerodynamic")):
@@ -561,6 +693,11 @@ def _phase_from_plan(plan: ScenarioPlan, status: str) -> PlanningAgentPhase:
 
 
 def _summary_from_plan(plan: ScenarioPlan, status: str) -> str:
+    if plan.scenario_type == "motion_proxy":
+        return (
+            "Differential-MRF motion proxy: steady case with per-rotor speed "
+            "deltas, not a direct angular-rate simulation."
+        )
     if status == "ready_for_human_review" and plan.spec is not None:
         return (
             f"{plan.spec.case_name}: {plan.spec.reference_velocity_mps:g} m/s, "
@@ -570,6 +707,11 @@ def _summary_from_plan(plan: ScenarioPlan, status: str) -> str:
         )
     if plan.scenario_type == "trim_guidance":
         return "Trim is being handled as coaching and sweep design, not as one solved state."
+    if plan.scenario_type == "static_hover_mrf":
+        return (
+            "Static hover MRF smoke case: zero freestream, zero/default attitude, "
+            "spinning rotors, no floor or trim claim."
+        )
     if plan.scenario_type == "hover_or_takeoff":
         return (
             "Manoeuvre request captured, but not yet writeable in the steady "
@@ -592,50 +734,91 @@ def _message_from_plan(plan: ScenarioPlan, status: str) -> str:
             )
         ):
             return (
-                "I can help with the current educational drone CFD envelope: steady, "
-                "incompressible, low-speed external aerodynamics for the legacy-box "
-                "quadcopter.\n\n"
-                "Good demo requests are: cruise at a chosen freestream speed, a fixed "
-                "roll/pitch/yaw attitude case, a case with the MRF rotor approximation, "
-                "or a small pitch/rotor-speed sweep to study trim. Hover, takeoff, "
-                "ground effect, and true yaw-in-place manoeuvres are useful roadmap "
-                "items, but they are not yet writeable as validated simpleFoam cases.\n\n"
-                "Pick one scenario and a speed in m/s, then I can draft the typed case."
+                "I can help with one strong demo path today: a steady low-speed drone "
+                "CFD case for the legacy quadcopter, usually with the MRF rotor "
+                "approximation switched on so the props have a cheap spinning-zone "
+                "model.\n\n"
+                "My recommended layperson default is a 5 m/s cruise case with MRF "
+                "rotors at the heuristic 1000 rad/s baseline. The other useful demo is "
+                "a static 0 m/s hover smoke case with the same rotors, clearly labelled "
+                "as an approximation rather than validated hover trim."
             )
         return (
-            "That is a design goal rather than a CFD case yet. To make it demo-ready, "
-            "I need to pin down the scenario: cruise, a fixed attitude case, or a "
-            "rotor/downwash approximation. I also need a freestream speed in m/s and "
-            "whether to include MRF rotors."
+            "That is a design goal rather than a CFD case yet. I would turn it into a "
+            "baseline cruise/downwash study first: 5 m/s, MRF rotors, then inspect "
+            "pressure and velocity fields. If that is too slow or too fast, give me "
+            "one target speed and I will update the typed case."
         )
     if plan.scenario_type == "trim_guidance":
         velocity = _extract_velocity_for_message(plan.user_request)
-        guidance = _trim_guidance_text(velocity)
+        guidance = get_cruise_performance_guidance(velocity)
+        rotor_summary = _rotor_speed_summary(guidance.baseline_rotor_speeds_rad_s)
         return (
-            f"For {velocity:g} m/s, I would not claim a solved trim state yet. "
-            "The current system can propose a small CFD sweep and then compare "
-            "forces and moments after the runs.\n\n"
-            f"{guidance}\n\n"
-            "The next writeable step is either one smoke case from that sweep, or a "
-            "small generated suite so we can inspect lift, drag, and pitching moment."
+            f"For {velocity:g} m/s, I would use an expert-default baseline rather "
+            f"than making you pick numbers: pitch about {guidance.recommended_pitch_deg:g} deg "
+            f"and shared MRF magnitude about {guidance.baseline_omega_rad_s:g} rad/s. "
+            f"Signed rotor speeds would be {rotor_summary}.\n\n"
+            "This is a heuristic starting point from the performance table, not a "
+            "solved trim result. The disciplined next step is either to write that "
+            "one baseline case, or record a future trim sweep that varies pitch and "
+            f"omega over {guidance.pitch_sweep_deg} deg and "
+            f"{guidance.omega_sweep_rad_s} rad/s."
         )
     if plan.scenario_type == "hover_or_takeoff":
         if "yaw" in plan.user_request.lower() or "spin" in plan.user_request.lower():
+            yaw_rate = plan.intent.requested_yaw_rate_deg_s if plan.intent else None
+            if yaw_rate is None and "slow" in plan.user_request.lower():
+                yaw_rate = 30.0
+            guidance = get_cruise_performance_guidance(
+                DEFAULT_PHYSICS_ENVELOPE.default_cruise_velocity_mps,
+                yaw_rate_deg_s=yaw_rate,
+            )
+            proxy_text = ""
+            if guidance.yaw_proxy_rotor_speeds_rad_s is not None and yaw_rate is not None:
+                proxy_text = (
+                    "\n\n"
+                    f"For a future slow-yaw proxy, I would start around {yaw_rate:g} deg/s "
+                    "and perturb the opposite rotor pairs like this: "
+                    f"{_rotor_speed_summary(guidance.yaw_proxy_rotor_speeds_rad_s)}."
+                )
             return (
-                "Yawing in place is a good engineering target, but it is not yet a "
-                "writeable Whittle case. A real quadcopter yaws by changing the "
-                "torque balance between opposite rotor pairs: one diagonal speeds up "
-                "while the other slows down, ideally without changing total lift too "
-                "much.\n\n"
-                "The current OpenFOAM writer supports steady external cruise/attitude "
-                "cases, with optional MRF rotors. For today, we can approximate this "
-                "as a fixed-attitude MRF case, or keep yaw-in-place as the next "
-                "manoeuvre model to implement."
+                "Yawing in place is the right physical concept, but it crosses the "
+                "current contract boundary. A real quadcopter yaws by changing rotor "
+                "torque balance between opposite pairs; the current steady simpleFoam "
+                "writer cannot impose yaw_dot directly."
+                f"{proxy_text}\n\n"
+                "For a writeable case today, I would lock a 5 m/s MRF cruise baseline. "
+                "For the roadmap, I would record yaw-in-place as a differential-rotor "
+                "manoeuvre requirement."
             )
         return (
             "Hover/takeoff is outside the current steady external-flow writer. "
             "For today we can approximate rotor downwash in forward flight with MRF "
             "rotors, or record hover/takeoff as the next physics-envelope extension."
+        )
+    if plan.scenario_type == "static_hover_mrf" and plan.spec is not None:
+        max_omega = max((abs(zone.omega_rad_s) for zone in plan.spec.mrf_zones), default=0.0)
+        return (
+            f"I can draft this as `{plan.spec.case_name}`: a steady static MRF hover "
+            f"smoke case with 0 m/s freestream, roll/pitch/yaw "
+            f"{plan.spec.roll_angle_deg:g}/{plan.spec.pitch_angle_deg:g}/"
+            f"{plan.spec.yaw_angle_deg:g} deg, and rotor MRF speed "
+            f"{max_omega:g} rad/s.\n\n"
+            "This is intentionally labelled as a smoke approximation. It can show "
+            "rotor-driven flow/downwash around the legacy quadcopter, but it is not "
+            "a validated hover trim, takeoff transient, or floor/ground-effect case."
+        )
+    if plan.scenario_type == "motion_proxy" and plan.spec is not None:
+        return (
+            f"I can draft this as `{plan.spec.case_name}`: a steady differential-MRF "
+            f"motion proxy with u={plan.spec.reference_velocity_mps:g} m/s and "
+            f"roll/pitch/yaw attitude {plan.spec.roll_angle_deg:g}/"
+            f"{plan.spec.pitch_angle_deg:g}/{plan.spec.yaw_angle_deg:g} deg. "
+            f"Rotor speeds: {_mrf_speed_summary_from_spec(plan.spec.mrf_zones)}.\n\n"
+            "This is useful for interview/demo purposes because it turns a lay "
+            "manoeuvre request into a typed, inspectable CFD proxy. It is not a "
+            "solved flight-dynamics controller, and simpleFoam is not imposing "
+            "body roll_dot/pitch_dot/yaw_dot directly."
         )
     if status == "out_of_scope":
         question = f" {plan.clarifying_questions[0]}" if plan.clarifying_questions else ""
@@ -646,33 +829,50 @@ def _message_from_plan(plan: ScenarioPlan, status: str) -> str:
         return "I need one or two more details before this can become a case spec."
     assert plan.spec is not None
     rotor_text = "with MRF rotors" if plan.spec.rotor_model == "mrf" else "without rotor forcing"
+    rotor_detail = ""
+    if plan.spec.rotor_model == "mrf":
+        rotor_detail = f" Rotor speeds: {_mrf_speed_summary_from_spec(plan.spec.mrf_zones)}."
     return (
         f"I can set this up as `{plan.spec.case_name}` at "
-        f"{plan.spec.reference_velocity_mps:g} m/s {rotor_text}. "
+        f"{plan.spec.reference_velocity_mps:g} m/s {rotor_text}."
+        f"{rotor_detail} "
         "Please review the assumptions before writing files."
     )
 
 
 def _next_actions_from_plan(plan: ScenarioPlan, status: str) -> list[str]:
+    if plan.scenario_type == "motion_proxy":
+        return [
+            "Write this differential-MRF proxy case.",
+            "Revise the requested rates or freestream speed first.",
+        ]
     if status == "ready_for_human_review":
         return [
-            "Review assumptions and warnings.",
-            "Confirm whether to write the OpenFOAM case files.",
+            "Write this baseline OpenFOAM case.",
+            "Revise speed, attitude, or rotor speed first.",
         ]
     if plan.scenario_type == "vague_request":
         return _supported_scenario_actions()
-    if plan.scenario_type == "trim_guidance":
+    if plan.scenario_type == "static_hover_mrf":
         return [
-            "Write one smoke case at 10 m/s, pitch 6 deg, with MRF rotors at 1100 rad/s.",
-            "Create a pitch and rotor-speed sweep for 10 m/s.",
-            "Explain how to read force and moment outputs for trim.",
+            "Review the zero-freestream MRF assumptions.",
+            "Confirm whether to write the static hover smoke case.",
+        ]
+    if plan.scenario_type == "trim_guidance":
+        velocity = _extract_velocity_for_message(plan.user_request)
+        guidance = get_cruise_performance_guidance(velocity)
+        return [
+            (
+                f"Lock one baseline: {velocity:g} m/s, pitch "
+                f"{guidance.recommended_pitch_deg:g} deg, MRF "
+                f"{guidance.baseline_omega_rad_s:g} rad/s."
+            ),
+            "Record a future pitch/omega trim-sweep requirement.",
         ]
     if plan.scenario_type == "hover_or_takeoff":
         return [
-            "Choose a yaw rate, for example 30-90 deg/s, for the future manoeuvre model.",
-            "Approximate this today as 5 m/s cruise with MRF rotors.",
-            "Set up pitch 10 deg at 5 m/s with MRF rotors.",
-            "Add yaw-in-place as a future differential-rotor manoeuvre case.",
+            "Write a supported 5 m/s MRF cruise baseline.",
+            "Record yaw-in-place as a future differential-rotor manoeuvre case.",
         ]
     if plan.clarifying_questions:
         return plan.clarifying_questions
@@ -682,9 +882,7 @@ def _next_actions_from_plan(plan: ScenarioPlan, status: str) -> list[str]:
 def _supported_scenario_actions() -> list[str]:
     return [
         "Set up cruise at 5 m/s with MRF rotors.",
-        "Run pitch 10 degrees at 5 m/s with MRF rotors.",
-        "Plan a 10 m/s pitch and rotor-speed sweep.",
-        "Explain what is needed for yaw-in-place later.",
+        "Set up a slow yaw-in-place differential-MRF proxy.",
     ]
 
 
@@ -696,11 +894,95 @@ def _extract_velocity_for_message(text: str) -> float:
 
 
 def _trim_guidance_text(velocity_mps: float) -> str:
-    if velocity_mps <= 6:
-        return "Suggested sweep: pitch 0, 3, 6 deg crossed with 800, 1000, 1200 rad/s."
-    if velocity_mps <= 12:
-        return "Suggested sweep: pitch 3, 6, 9, 12 deg crossed with 900, 1100, 1300 rad/s."
-    return "Suggested sweep: pitch 6, 10, 14, 18 deg crossed with 1100, 1400, 1700 rad/s."
+    guidance = get_cruise_performance_guidance(velocity_mps)
+    return (
+        f"Suggested sweep: pitch {guidance.pitch_sweep_deg} deg crossed with "
+        f"{guidance.omega_sweep_rad_s} rad/s."
+    )
+
+
+def _rotor_speed_summary(rotors: Any) -> str:
+    return (
+        f"FL {rotors.propeller_fl_rad_s:g}, FR {rotors.propeller_fr_rad_s:g}, "
+        f"RL/BL {rotors.propeller_bl_rad_s:g}, RR/BR {rotors.propeller_br_rad_s:g} rad/s"
+    )
+
+
+def _mrf_speed_summary_from_spec(zones: list[Any]) -> str:
+    by_patch = {zone.source_patch: zone.omega_rad_s for zone in zones}
+    if not by_patch:
+        return "none"
+    return (
+        f"FL {by_patch.get('propeller_fl', 0.0):g}, "
+        f"FR {by_patch.get('propeller_fr', 0.0):g}, "
+        f"RL/BL {by_patch.get('propeller_bl', 0.0):g}, "
+        f"RR/BR {by_patch.get('propeller_br', 0.0):g} rad/s"
+    )
+
+
+def _is_static_hover_text(text: str) -> bool:
+    if _requires_floor_or_ground(text):
+        return False
+    if any(term in text for term in ("takeoff", "take-off", "landing")):
+        return False
+    if any(term in text for term in ("yawing in place", "yaw in place", "spin", "rotate")):
+        return False
+    return any(
+        term in text
+        for term in (
+            "hover",
+            "hover-in-place",
+            "hover in place",
+            "zero freestream",
+            "0 freestream",
+            "0 onset",
+        )
+    ) or bool(_ZERO_SPEED_RE.search(text))
+
+
+def _is_motion_proxy_text(text: str) -> bool:
+    if _requires_floor_or_ground(text):
+        return False
+    if any(term in text for term in ("takeoff", "take-off", "landing")):
+        return False
+    return any(
+        term in text
+        for term in (
+            "yawing in place",
+            "yaw in place",
+            "spinning in place",
+            "spin in place",
+            "rotate in place",
+            "rolling in place",
+            "roll in place",
+            "pitching in place",
+            "pitch in place",
+            "deg/s",
+            "degrees per second",
+            "slow yaw",
+            "slowly yaw",
+            "slow roll",
+            "slowly roll",
+            "slow pitch",
+            "slowly pitch",
+        )
+    )
+
+
+def _requires_floor_or_ground(text: str) -> bool:
+    if not any(term in text for term in ("floor", "ground", "ground-effect", "ground effect")):
+        return False
+    negated_terms = (
+        "no floor",
+        "without floor",
+        "no need for the floor",
+        "no need for a floor",
+        "no ground",
+        "without ground",
+        "no ground effect",
+        "no ground-effect",
+    )
+    return not any(term in text for term in negated_terms)
 
 
 def _terminal_trace_event(status: str) -> TraceEvent:
@@ -721,6 +1003,37 @@ def _terminal_trace_event(status: str) -> TraceEvent:
         message="Planner classified the request outside the current physics envelope.",
         data={"status": status},
     )
+
+
+def _performance_guidance_trace_events(plan: ScenarioPlan) -> list[TraceEvent]:
+    if plan.scenario_type == "trim_guidance":
+        velocity = _extract_velocity_for_message(plan.user_request)
+        guidance = get_cruise_performance_guidance(velocity)
+        return [
+            TraceEvent(
+                event_type="PerformanceGuidanceRun",
+                message="Heuristic pitch and rotor-speed guidance was generated.",
+                data=guidance.model_dump(mode="json"),
+            )
+        ]
+    if plan.scenario_type == "hover_or_takeoff" and (
+        "yaw" in plan.user_request.lower() or "spin" in plan.user_request.lower()
+    ):
+        yaw_rate = plan.intent.requested_yaw_rate_deg_s if plan.intent else None
+        if yaw_rate is None and "slow" in plan.user_request.lower():
+            yaw_rate = 30.0
+        guidance = get_cruise_performance_guidance(
+            DEFAULT_PHYSICS_ENVELOPE.default_cruise_velocity_mps,
+            yaw_rate_deg_s=yaw_rate,
+        )
+        return [
+            TraceEvent(
+                event_type="PerformanceGuidanceRun",
+                message="Future differential-rotor yaw proxy guidance was generated.",
+                data=guidance.model_dump(mode="json"),
+            )
+        ]
+    return []
 
 
 def _stream_trace(

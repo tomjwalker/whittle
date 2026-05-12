@@ -14,6 +14,7 @@ from whittle.tools.transform_tools import (
     has_nonzero_attitude,
     mrf_cylinder_endpoints,
     rotation_matrix,
+    rotor_disk_cylinder_endpoints,
 )
 from whittle.tools.validation_tools import validate_case_spec, validate_required_files
 
@@ -111,10 +112,12 @@ def write_openfoam_case(spec: SimulationCaseSpec, output_dir: Path) -> CaseSetup
     )
     if spec.rotor_model == "mrf":
         _write(case_dir, "constant/MRFProperties", _mrf_properties(spec), files_written)
+    if spec.rotor_model == "rotor_disk":
+        _write(case_dir, "system/fvOptions", _fv_options(spec), files_written)
     _write(case_dir, "system/controlDict", _control_dict(spec), files_written)
     _write(case_dir, "system/blockMeshDict", _block_mesh_dict(spec), files_written)
     _write(case_dir, "system/snappyHexMeshDict", _snappy_hex_mesh_dict(spec), files_written)
-    if spec.rotor_model == "mrf":
+    if _needs_topo_set(spec):
         _write(case_dir, "system/topoSetDict", _topo_set_dict(spec), files_written)
     _write(case_dir, "system/fvSchemes", _fv_schemes(), files_written)
     _write(case_dir, "system/fvSolution", _fv_solution(), files_written)
@@ -192,10 +195,11 @@ def _expected_files(spec: SimulationCaseSpec) -> list[str]:
         "constant/transportProperties",
         "constant/turbulenceProperties",
         *(["constant/MRFProperties"] if spec.rotor_model == "mrf" else []),
+        *(["system/fvOptions"] if spec.rotor_model == "rotor_disk" else []),
         "system/controlDict",
         "system/blockMeshDict",
         "system/snappyHexMeshDict",
-        *(["system/topoSetDict"] if spec.rotor_model == "mrf" else []),
+        *(["system/topoSetDict"] if _needs_topo_set(spec) else []),
         "system/fvSchemes",
         "system/fvSolution",
         "Allrun",
@@ -465,6 +469,27 @@ def _snappy_hex_mesh_dict(spec: SimulationCaseSpec) -> str:
             "        }\n"
         )
 
+    for source in spec.rotor_disk_sources:
+        point1, point2 = rotor_disk_cylinder_endpoints(source)
+        cylinder_name = f"{source.name}Cylinder"
+        geometry_entries.append(
+            f"    {cylinder_name}\n"
+            "    {\n"
+            "        type searchableCylinder;\n"
+            f"        point1 {_foam_vector(point1)};\n"
+            f"        point2 {_foam_vector(point2)};\n"
+            f"        radius {source.radius_m:g};\n"
+            "    }\n"
+        )
+        refinement_region_entries.append(
+            f"        {cylinder_name}\n"
+            "        {\n"
+            "            mode inside;\n"
+            "            levels ((1e15 0));\n"
+            f"            cellZone {source.cell_zone};\n"
+            "        }\n"
+        )
+
     return (
         _header("dictionary", "snappyHexMeshDict")
         + "castellatedMesh true;\n"
@@ -544,6 +569,73 @@ def _mrf_properties(spec: SimulationCaseSpec) -> str:
     return _header("dictionary", "MRFProperties") + "\n".join(zone_blocks)
 
 
+def _fv_options(spec: SimulationCaseSpec) -> str:
+    source_blocks = []
+    for source in spec.rotor_disk_sources:
+        rpm = _rad_s_to_rpm(source.omega_rad_s)
+        blade_rows = _rotor_disk_blade_rows(source)
+        source_blocks.append(
+            f"{source.name}\n"
+            "{\n"
+            "    type            rotorDisk;\n"
+            "    active          yes;\n"
+            "    selectionMode   cellZone;\n"
+            f"    cellZone        {source.cell_zone};\n\n"
+            "    fields          (U);\n"
+            f"    nBlades         {source.n_blades};\n"
+            f"    tipEffect       {source.tip_effect:g};\n\n"
+            "    inletFlowType   local;\n"
+            f"    inletVelocity   ({spec.reference_velocity_mps:g} 0 0);\n\n"
+            "    geometryMode    specified;\n"
+            f"    origin          {_foam_vector(source.centre_m)};\n"
+            f"    axis            {_foam_vector(source.axis)};\n"
+            f"    refDirection    {_foam_vector(source.ref_direction)};\n\n"
+            f"    rpm             {rpm:g};\n\n"
+            "    trimModel       fixedTrim;\n"
+            f"    rhoRef          {source.rho_ref_kg_m3:g};\n"
+            "    rhoInf          1;\n\n"
+            "    fixedTrimCoeffs\n"
+            "    {\n"
+            "        theta0      8;\n"
+            "        theta1c     0;\n"
+            "        theta1s     0;\n"
+            "    }\n\n"
+            "    flapCoeffs\n"
+            "    {\n"
+            "        beta0       0;\n"
+            "        beta1c      0;\n"
+            "        beta2s      0;\n"
+            "    }\n\n"
+            "    blade\n"
+            "    {\n"
+            "        data\n"
+            "        (\n"
+            f"{blade_rows}"
+            "        );\n"
+            "    }\n\n"
+            "    profiles\n"
+            "    {\n"
+            "        profile1\n"
+            "        {\n"
+            "            type lookup;\n"
+            "            data\n"
+            "            (\n"
+            "                (-180 0 0)\n"
+            "                (-15 -0.4 0.09)\n"
+            "                (-10 -0.2 0.06)\n"
+            "                (0 0 0.015)\n"
+            "                (10 0.9 0.05)\n"
+            "                (15 1.0 0.08)\n"
+            "                (180 0 0)\n"
+            "            );\n"
+            "        }\n"
+            "    }\n"
+            "}\n"
+        )
+
+    return _header("dictionary", "fvOptions", "system") + "\n".join(source_blocks)
+
+
 def _topo_set_dict(spec: SimulationCaseSpec) -> str:
     cylinder_actions = []
     zone_actions = []
@@ -574,6 +666,37 @@ def _topo_set_dict(spec: SimulationCaseSpec) -> str:
             "        sourceInfo\n"
             "        {\n"
             f"            set {zone.cell_zone};\n"
+            "        }\n"
+            "    }\n"
+        )
+
+    for source in spec.rotor_disk_sources:
+        point1, point2 = rotor_disk_cylinder_endpoints(source)
+        cylinder_actions.append(
+            f"    // {source.name}: select cells inside the rotor-disk source cylinder.\n"
+            "    {\n"
+            f"        name    {source.cell_zone};\n"
+            "        type    cellSet;\n"
+            "        action  new;\n"
+            "        source  cylinderToCell;\n"
+            "        sourceInfo\n"
+            "        {\n"
+            f"            p1     {_foam_vector(point1)};\n"
+            f"            p2     {_foam_vector(point2)};\n"
+            f"            radius {source.radius_m:g};\n"
+            "        }\n"
+            "    }\n"
+        )
+        zone_actions.append(
+            f"    // Convert {source.cell_zone} cellSet into a rotorDisk cellZone.\n"
+            "    {\n"
+            f"        name    {source.cell_zone};\n"
+            "        type    cellZoneSet;\n"
+            "        action  new;\n"
+            "        source  setToCellZone;\n"
+            "        sourceInfo\n"
+            "        {\n"
+            f"            set {source.cell_zone};\n"
             "        }\n"
             "    }\n"
         )
@@ -638,14 +761,14 @@ def _fv_solution() -> str:
 
 
 def _allrun(spec: SimulationCaseSpec) -> str:
-    mrf_steps = "runApplication topoSet\n" if spec.rotor_model == "mrf" else ""
+    topo_set_steps = "runApplication topoSet\n" if _needs_topo_set(spec) else ""
     return (
         "#!/bin/sh\n"
         'cd "${0%/*}" || exit\n'
         '. ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions\n\n'
         "runApplication blockMesh\n"
         "runApplication snappyHexMesh -overwrite\n"
-        f"{mrf_steps}"
+        f"{topo_set_steps}"
         "runApplication checkMesh\n"
         "runApplication simpleFoam\n"
     )
@@ -703,6 +826,25 @@ def _foam_float(value: float) -> str:
     return f"{value:.9g}"
 
 
+def _rad_s_to_rpm(value: float) -> float:
+    return value * 60.0 / (2.0 * math.pi)
+
+
+def _rotor_disk_blade_rows(source) -> str:
+    root = max(source.radius_m * 0.2, 0.005)
+    mid = max(source.radius_m * 0.58, root * 1.5)
+    tip = max(source.radius_m * 0.95, mid * 1.1)
+    return (
+        f"            (profile1 ({root:g} 12 0.012))\n"
+        f"            (profile1 ({mid:g} 8 0.010))\n"
+        f"            (profile1 ({tip:g} 4 0.006))\n"
+    )
+
+
+def _needs_topo_set(spec: SimulationCaseSpec) -> bool:
+    return spec.rotor_model in {"mrf", "rotor_disk"}
+
+
 def _solver_block(field: str, solver: str, preconditioner: str, tolerance: str) -> str:
     return (
         f"    {field}\n"
@@ -717,7 +859,8 @@ def _solver_block(field: str, solver: str, preconditioner: str, tolerance: str) 
 
 def _turbulent_kinetic_energy(velocity_mps: float) -> float:
     intensity = 0.05
-    return 1.5 * (intensity * velocity_mps) ** 2
+    effective_velocity = max(abs(velocity_mps), 0.5)
+    return 1.5 * (intensity * effective_velocity) ** 2
 
 
 def _omega(velocity_mps: float) -> float:
@@ -736,7 +879,7 @@ def _characteristic_length_m(spec: SimulationCaseSpec) -> float:
 
 
 def _manual_run_hint(spec: SimulationCaseSpec) -> str:
-    if spec.rotor_model == "mrf":
+    if _needs_topo_set(spec):
         return (
             "Run blockMesh, snappyHexMesh -overwrite, topoSet, checkMesh, "
             "then simpleFoam manually."

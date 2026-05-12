@@ -7,7 +7,7 @@ import math
 import numpy as np
 
 from whittle.models.geometry import Vector3
-from whittle.models.rotors import MRFZoneSpec
+from whittle.models.rotors import MRFZoneSpec, RotorDiskSourceSpec
 
 
 def rotation_matrix(
@@ -101,11 +101,40 @@ def transform_mrf_zone(
     )
 
 
+def transform_rotor_disk_source(
+    source: RotorDiskSourceSpec,
+    matrix: np.ndarray,
+    origin: Vector3 = (0.0, 0.0, 0.0),
+) -> RotorDiskSourceSpec:
+    return source.model_copy(
+        update={
+            "centre_m": transform_point(source.centre_m, matrix, origin),
+            "axis": normalise_vector(transform_vector(source.axis, matrix)),
+            "ref_direction": normalise_vector(transform_vector(source.ref_direction, matrix)),
+        }
+    )
+
+
 def mrf_cylinder_endpoints(zone: MRFZoneSpec) -> tuple[Vector3, Vector3]:
-    axis = np.array(normalise_vector(zone.axis), dtype=float)
-    centre = np.array(zone.centre_m, dtype=float)
-    half_height = 0.5 * zone.height_m
-    return _to_vector3(centre - axis * half_height), _to_vector3(centre + axis * half_height)
+    return cylinder_endpoints(zone.centre_m, zone.axis, zone.height_m)
+
+
+def rotor_disk_cylinder_endpoints(source: RotorDiskSourceSpec) -> tuple[Vector3, Vector3]:
+    return cylinder_endpoints(source.centre_m, source.axis, source.height_m)
+
+
+def cylinder_endpoints(
+    centre_m: Vector3,
+    axis: Vector3,
+    height_m: float,
+) -> tuple[Vector3, Vector3]:
+    axis_values = np.array(normalise_vector(axis), dtype=float)
+    centre = np.array(centre_m, dtype=float)
+    half_height = 0.5 * height_m
+    return (
+        _to_vector3(centre - axis_values * half_height),
+        _to_vector3(centre + axis_values * half_height),
+    )
 
 
 def _to_vector3(values: np.ndarray) -> Vector3:

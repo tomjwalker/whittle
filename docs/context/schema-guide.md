@@ -29,7 +29,7 @@ In V1, the front of this chain will start from a natural-language request:
 
 ```text
 messy user request
-  -> planning/extraction layer
+  -> ScenarioIntent / motion-command planning layer
   -> SimulationCaseSpec
   -> validation/evals
   -> OpenFOAM case writer
@@ -154,6 +154,19 @@ Purpose:
 - Reserved for the point where rotor modelling grows beyond a flat list on
   `SimulationCaseSpec`.
 
+### `RotorDiskSourceSpec`
+
+Typed OpenFOAM `rotorDisk` `fvOptions` source around one propeller.
+
+Purpose:
+
+- Reuses the legacy propeller centres and rotor-zone cell names.
+- Generates searchable cylinder regions, `topoSet` cell zones, and
+  `system/fvOptions` from one typed source.
+- Gives the planner an explicit MRF-vs-rotor-disk fidelity tradeoff: MRF is
+  cheaper/conservative; rotor-disk source terms are better for visible
+  downwash but more heuristic.
+
 ## Planning Schemas
 
 Defined in `src/whittle/models/planning.py`.
@@ -183,6 +196,20 @@ Purpose:
 - Acts as the first non-LLM rehearsal for the later PydanticAI workflow.
 - Is a natural response object for a chat UI: the user sees what was extracted
   and what still needs clarification.
+
+### `MotionIntent` And `MotionRotorCommand`
+
+Defined in `src/whittle/tools/performance_guidance.py`.
+
+Purpose:
+
+- Represents bespoke manoeuvre requests before they become case files:
+  `u`, `v`, `w`, roll/pitch/yaw, and roll/pitch/yaw rates.
+- Converts those inputs through a transparent heuristic table/function into
+  signed FL/FR/BL/BR MRF rotor speeds.
+- Lets the agent discuss yawing, rolling, pitching, or combined manoeuvres with
+  a lay user while keeping the caveat explicit: this is a steady differential
+  MRF proxy, not a solved flight-dynamics controller.
 
 ## Case Schemas
 
@@ -224,8 +251,9 @@ class SimulationCaseSpec(BaseModel):
     yaw_angle_deg: float = 0.0
     roll_angle_deg: float = 0.0
     pitch_angle_deg: float = 0.0
-    rotor_model: Literal["none", "actuator_disk_placeholder", "mrf"] = "none"
+    rotor_model: Literal["none", "actuator_disk_placeholder", "mrf", "rotor_disk"] = "none"
     mrf_zones: list[MRFZoneSpec] = []
+    rotor_disk_sources: list[RotorDiskSourceSpec] = []
     solver_family: str = "simpleFoam"
     turbulence_model: str = "kOmegaSST"
     mesh_strategy: str = "blockMesh background mesh with snappyHexMesh surface snapping"
@@ -329,9 +357,9 @@ Purpose:
 
 - These schemas are deliberately domain-specific. They describe CFD setup
   concepts, not generic agent messages.
-- They are also deliberately incomplete. V0.2 models MRF zones and rigid
-  transforms, but not actuator-disk source terms, log parsing, convergence
-  state, or post-processing.
+- They are also deliberately incomplete. V0.2 models MRF zones, rotor-disk
+  source terms, and rigid transforms, but not blade-resolved transient rotor
+  CFD, convergence state, or post-processing.
 - The right growth pattern is: add fields when a test, eval, agent tool, or UI
   genuinely needs them.
 - Do not use the Pydantic models as a dumping ground for every possible

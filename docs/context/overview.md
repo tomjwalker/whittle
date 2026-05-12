@@ -17,8 +17,8 @@ validation / evals -> human review -> product loop.
 ## Scope Right Now
 
 - Primary user: Tom, as an AI engineer with CFD/F1 aerodynamics background
-- Current phase: V0.2 deterministic MRF and attitude-transform foundation,
-  plus V1/V2 planning-agent scaffold
+- Current phase: V0.2 deterministic MRF, rotor-disk, and attitude-transform
+  foundation, plus V1/V2 planning-agent scaffold
 - Primary workflow: generate an inspectable OpenFOAM case skeleton for external
   drone aerodynamics from typed Pydantic models
 
@@ -47,8 +47,8 @@ For the supported CFD scenario envelope, see `docs/context/physics-envelope.md`.
 - Do not commit raw secrets or large local CAD directories.
 - Keep the demo civil/educational: no weapons, targeting, evasion, or mission
   optimisation.
-- Do not use FreeCAD preprocessing, actuator disk source terms, automated solver
-  execution, or UI in the deterministic foundation.
+- Do not use FreeCAD preprocessing, blade-resolved transient rotor CFD, or
+  unsupervised solver execution in the deterministic foundation.
 
 ## Non-Goals
 
@@ -59,7 +59,7 @@ For the supported CFD scenario envelope, see `docs/context/physics-envelope.md`.
 
 ## Near-Term Priorities
 
-1. Smoke-test the combined-attitude MRF case in WSL.
+1. Smoke-test the rotor-disk hover/downwash case in WSL.
 2. Exercise the new deterministic evals and PydanticAI agent with real API
    credentials.
 3. Use the local Next.js UI to iterate on the scenario-honing workflow.

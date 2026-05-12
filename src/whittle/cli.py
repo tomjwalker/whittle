@@ -9,6 +9,7 @@ from pathlib import Path
 from whittle.agents.cfd_planning_agent import run_planning_agent
 from whittle.evals.planning import run_planning_evals_from_file
 from whittle.openfoam.case_writer import write_openfoam_case
+from whittle.openfoam.wsl_runner import OpenFOAMRunConfig, stream_wsl_openfoam_run
 from whittle.tools.attitude_suite import write_attitude_smoke_suite
 from whittle.tools.case_tools import build_case_spec
 from whittle.tools.geometry_presets import build_legacy_box_geometry, build_single_stl_geometry
@@ -39,6 +40,8 @@ def main(argv: list[str] | None = None) -> int:
         result = run_planning_evals_from_file(args.cases)
         print(result.model_dump_json(indent=2))
         return 0 if result.passed else 1
+    if args.command == "run-openfoam":
+        return asyncio.run(_run_openfoam(args))
 
     parser.print_help()
     return 1
@@ -73,15 +76,18 @@ def _build_parser() -> argparse.ArgumentParser:
     write_case.add_argument("--velocity", type=float, help="Reference inlet velocity in m/s.")
     write_case.add_argument(
         "--rotor-model",
-        choices=["none", "mrf", "actuator-disk-placeholder"],
+        choices=["none", "mrf", "rotor-disk", "actuator-disk-placeholder"],
         default="none",
-        help="Rotor modelling option. MRF is currently supported for --preset legacy-box.",
+        help=(
+            "Rotor modelling option. MRF and rotor-disk are currently supported "
+            "for --preset legacy-box."
+        ),
     )
     write_case.add_argument(
         "--mrf-omega-rad-s",
         type=float,
         default=1000.0,
-        help="Unsigned rotor MRF angular speed in rad/s; signs alternate by rotor.",
+        help="Unsigned rotor angular speed in rad/s; signs alternate by rotor.",
     )
     write_case.add_argument("--roll-deg", type=float, default=0.0, help="Additional roll angle.")
     write_case.add_argument("--pitch-deg", type=float, default=0.0, help="Additional pitch angle.")
@@ -168,6 +174,19 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path("examples/planning_eval_cases.json"),
         help="JSON fixture file.",
     )
+
+    run_openfoam = subparsers.add_parser(
+        "run-openfoam",
+        help="Copy a generated case into WSL and run the OpenFOAM command sequence.",
+    )
+    run_openfoam.add_argument("--case-dir", type=Path, required=True)
+    run_openfoam.add_argument("--case-name", help="WSL target case name. Defaults to folder name.")
+    run_openfoam.add_argument("--distro", default="Ubuntu-22.04")
+    run_openfoam.add_argument(
+        "--bashrc",
+        default="/opt/OpenFOAM/OpenFOAM-v2012/etc/bashrc",
+        help="OpenFOAM bashrc path inside WSL.",
+    )
     return parser
 
 
@@ -189,16 +208,21 @@ def _write_case(args: argparse.Namespace):
     else:
         raise SystemExit("write-case requires either --preset legacy-box or --geometry PATH.")
 
-    rotor_model = (
-        "actuator_disk_placeholder"
-        if args.rotor_model == "actuator-disk-placeholder"
-        else args.rotor_model
+    rotor_model = {
+        "actuator-disk-placeholder": "actuator_disk_placeholder",
+        "rotor-disk": "rotor_disk",
+    }.get(args.rotor_model, args.rotor_model)
+    flow_regime = (
+        "steady_incompressible_static_rotor_disk_hover"
+        if rotor_model == "rotor_disk" and velocity == 0
+        else "steady_incompressible_external"
     )
 
     spec = build_case_spec(
         case_name=case_name,
         geometry=geometry,
         velocity_mps=velocity,
+        flow_regime=flow_regime,
         max_iterations=args.max_iterations,
         write_interval=args.write_interval,
         rotor_model=rotor_model,
@@ -238,6 +262,21 @@ async def _agent_plan(args: argparse.Namespace):
         thinking=args.thinking,
         deterministic=args.deterministic,
     )
+
+
+async def _run_openfoam(args: argparse.Namespace) -> int:
+    config = OpenFOAMRunConfig(
+        case_dir=args.case_dir,
+        case_name=args.case_name or args.case_dir.name,
+        distro=args.distro,
+        bashrc=args.bashrc,
+    )
+    exit_code = 1
+    async for event in stream_wsl_openfoam_run(config):
+        print(f"[{event['type']}] {event['message']}", flush=True)
+        if event["type"] == "run_complete":
+            exit_code = 0
+    return exit_code
 
 
 if __name__ == "__main__":

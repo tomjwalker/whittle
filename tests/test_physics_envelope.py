@@ -18,6 +18,34 @@ def test_high_but_subhard_velocity_is_warned() -> None:
     assert any("above the typical small-quadcopter cruise range" in item for item in warnings)
 
 
+def test_zero_velocity_static_mrf_hover_is_allowed_with_warning() -> None:
+    spec = build_case_spec(
+        case_name="static_hover",
+        geometry=build_legacy_box_geometry(),
+        velocity_mps=0.0,
+        flow_regime="steady_incompressible_static_mrf_hover",
+        rotor_model="mrf",
+    )
+
+    checks, warnings, missing = validate_case_spec(spec)
+
+    assert not missing
+    assert any("static/differential MRF proxy" in item for item in checks)
+    assert any("Zero-freestream MRF proxy" in item for item in warnings)
+
+
+def test_zero_velocity_non_hover_case_is_blocked() -> None:
+    spec = build_case_spec(
+        case_name="zero_cruise",
+        geometry=build_legacy_box_geometry(),
+        velocity_mps=0.0,
+    )
+
+    _, _, missing = validate_case_spec(spec)
+
+    assert any("must be positive" in item for item in missing)
+
+
 def test_hard_velocity_limit_blocks_case() -> None:
     spec = build_case_spec(
         case_name="too_fast",

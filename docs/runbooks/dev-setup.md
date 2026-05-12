@@ -1,6 +1,6 @@
 # Development Setup
 
-_Last updated: 2026-05-10_
+_Last updated: 2026-05-12_
 
 ## Prerequisites
 
@@ -31,11 +31,28 @@ For the model-backed planning agent:
 OPENAI_API_KEY=sk-...
 WHITTLE_AGENT_MODEL=openai-responses:gpt-5.4-mini
 WHITTLE_AGENT_THINKING=medium
+WHITTLE_LOGFIRE_ENABLED=false
+LOGFIRE_TOKEN=
 ```
 
 The default model is `openai-responses:gpt-5.4-mini`, chosen as the current
 lower-cost OpenAI mini reasoning-capable option for shake-down. Use
 `openai-responses:gpt-5.5` for the more expensive flagship path when needed.
+
+## Optional Logfire Tracing
+
+Whittle can instrument FastAPI and PydanticAI with Pydantic Logfire. It is off
+by default so local development does not require a token.
+
+```bash
+WHITTLE_LOGFIRE_ENABLED=true
+LOGFIRE_TOKEN=...
+WHITTLE_ENVIRONMENT=local
+```
+
+When enabled, start the API normally and trigger a planning request from the UI.
+Traces should appear in the graphical Logfire UI with FastAPI requests,
+PydanticAI runs, tool calls, and model/provider spans where available.
 
 ## Python Commands
 
@@ -57,6 +74,9 @@ uv run whittle write-case --preset legacy-box --output outputs/legacy_box_smoke 
 
 # Generate a 5-iteration legacy MRF smoke case
 uv run whittle write-case --preset legacy-box --rotor-model mrf --mrf-omega-rad-s 1000 --max-iterations 5 --write-interval 5 --output outputs/legacy_box_mrf_smoke
+
+# Generate a 500-iteration rotor-disk hover/downwash case
+uv run whittle write-case --preset legacy-box --rotor-model rotor-disk --velocity 0 --mrf-omega-rad-s 1200 --max-iterations 500 --write-interval 100 --case-name legacy_box_rotor_disk_hover_t500 --output outputs/legacy_box_rotor_disk_hover_t500
 
 # Generate a 5-iteration pitch-transformed MRF smoke case
 uv run whittle write-case --preset legacy-box --rotor-model mrf --mrf-omega-rad-s 1000 --pitch-deg 10 --max-iterations 5 --write-interval 5 --output outputs/legacy_box_mrf_pitch10_smoke
@@ -95,6 +115,7 @@ GET  http://localhost:8000/health
 POST http://localhost:8000/api/plan
 POST http://localhost:8000/api/plan/stream
 POST http://localhost:8000/api/write-case
+POST http://localhost:8000/api/openfoam/run/stream
 ```
 
 `/api/plan/stream` emits newline-delimited JSON events for the UI.
@@ -111,7 +132,7 @@ npm run dev
 ```
 
 Open `http://localhost:3000`. The UI talks to
-`NEXT_PUBLIC_WHITTLE_API_URL`, defaulting to `http://localhost:8000`.
+`NEXT_PUBLIC_WHITTLE_API_URL`, defaulting to `http://127.0.0.1:8000`.
 
 ## OpenFOAM Activation
 
@@ -148,8 +169,9 @@ checkMesh 2>&1 | tee run_logs/checkMesh_$(date +%Y%m%d_%H%M%S).log
 simpleFoam 2>&1 | tee run_logs/simpleFoam_$(date +%Y%m%d_%H%M%S).log
 ```
 
-For MRF cases, `topoSet` is required after meshing so the rotor-cylinder
-`cellSet`s become the `cellZone`s referenced by `constant/MRFProperties`:
+For MRF and rotor-disk cases, `topoSet` is required after meshing so the
+rotor-cylinder `cellSet`s become the `cellZone`s referenced by
+`constant/MRFProperties` or `system/fvOptions`:
 
 ```bash
 cd ~/OpenFOAM/cases/legacy_box_mrf_smoke
@@ -160,6 +182,14 @@ snappyHexMesh -overwrite 2>&1 | tee run_logs/snappyHexMesh_$(date +%Y%m%d_%H%M%S
 topoSet 2>&1 | tee run_logs/topoSet_$(date +%Y%m%d_%H%M%S).log
 checkMesh 2>&1 | tee run_logs/checkMesh_$(date +%Y%m%d_%H%M%S).log
 simpleFoam 2>&1 | tee run_logs/simpleFoam_$(date +%Y%m%d_%H%M%S).log
+```
+
+Whittle can also copy a generated Windows case into WSL and run the fixed
+OpenFOAM command sequence. This creates a non-destructive unique target under
+`~/OpenFOAM/cases`:
+
+```powershell
+uv run whittle run-openfoam --case-dir outputs/legacy_box_rotor_disk_hover_t500 --case-name legacy_box_rotor_disk_hover_t500
 ```
 
 Later Whittle should gain a typed log parser for `checkMesh` and solver status.

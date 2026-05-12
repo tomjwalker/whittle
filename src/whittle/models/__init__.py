@@ -6,7 +6,7 @@ from whittle.models.geometry import DroneGeometrySpec, GeometrySurfaceSpec, StlM
 from whittle.models.openfoam import OpenFOAMCaseFiles
 from whittle.models.planning import PhysicsEnvelope, ScenarioPlan
 from whittle.models.reports import CaseSetupReport, TraceEvent
-from whittle.models.rotors import MRFZoneSpec, RotorAssemblySpec
+from whittle.models.rotors import MRFZoneSpec, RotorAssemblySpec, RotorDiskSourceSpec
 
 __all__ = [
     "BoundaryConditionPlan",
@@ -14,6 +14,7 @@ __all__ = [
     "DroneGeometrySpec",
     "GeometrySurfaceSpec",
     "MRFZoneSpec",
+    "RotorDiskSourceSpec",
     "OpenFOAMCaseFiles",
     "PhysicsEnvelope",
     "PlanningAgentResponse",

@@ -24,7 +24,16 @@ def validate_physics_envelope(
     missing: list[str] = []
 
     velocity = spec.reference_velocity_mps
-    if velocity < envelope.min_reference_velocity_mps:
+    if velocity < 0:
+        missing.append("reference_velocity_mps must not be negative.")
+    elif velocity == 0 and _is_zero_freestream_rotor_proxy(spec):
+        checks.append("Zero freestream is allowed for static/differential rotor proxy cases.")
+        warnings.append(
+            "Zero-freestream MRF proxy or rotor-disk proxy flow is an educational "
+            "steady approximation, not a validated hover trim, takeoff, yaw-rate, "
+            "or ground-effect simulation."
+        )
+    elif velocity < envelope.min_reference_velocity_mps:
         missing.append(
             "reference_velocity_mps is below the early-envelope minimum "
             f"of {envelope.min_reference_velocity_mps:g} m/s."
@@ -64,9 +73,34 @@ def validate_physics_envelope(
             )
         else:
             checks.append("MRF omega is inside the early physics envelope.")
+    elif spec.rotor_model == "rotor_disk":
+        max_omega = max(
+            (abs(source.omega_rad_s) for source in spec.rotor_disk_sources),
+            default=0.0,
+        )
+        if max_omega > envelope.hard_max_mrf_omega_rad_s:
+            missing.append(
+                "Rotor-disk omega exceeds the early-envelope hard limit "
+                f"of {envelope.hard_max_mrf_omega_rad_s:g} rad/s."
+            )
+        else:
+            checks.append("Rotor-disk omega is inside the early physics envelope.")
 
     return checks, warnings, missing
 
 
 def _attitude(spec: SimulationCaseSpec) -> tuple[float, float, float]:
     return spec.roll_angle_deg, spec.pitch_angle_deg, spec.yaw_angle_deg
+
+
+def _is_zero_freestream_rotor_proxy(spec: SimulationCaseSpec) -> bool:
+    return (
+        spec.flow_regime
+        in {
+            "steady_incompressible_static_mrf_hover",
+            "steady_incompressible_motion_proxy_mrf",
+            "steady_incompressible_static_rotor_disk_hover",
+            "steady_incompressible_motion_proxy_rotor_disk",
+        }
+        and spec.rotor_model in {"mrf", "rotor_disk"}
+    )

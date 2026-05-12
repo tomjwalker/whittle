@@ -152,6 +152,59 @@ def test_case_writer_writes_mrf_zones_for_legacy_box(tmp_path: Path) -> None:
     assert allrun.index("snappyHexMesh") < allrun.index("topoSet") < allrun.index("simpleFoam")
 
 
+def test_case_writer_writes_rotor_disk_sources_for_legacy_box(tmp_path: Path) -> None:
+    output_dir = tmp_path / "rotor_disk_case"
+    spec = build_case_spec(
+        case_name="rotor_disk_case",
+        geometry=build_legacy_box_geometry(),
+        velocity_mps=5.0,
+        rotor_model="rotor_disk",
+        mrf_omega_rad_s=1000.0,
+    )
+
+    report = write_openfoam_case(spec, output_dir)
+
+    snappy = (output_dir / "system/snappyHexMeshDict").read_text(encoding="utf-8")
+    topo_set = (output_dir / "system/topoSetDict").read_text(encoding="utf-8")
+    fv_options = (output_dir / "system/fvOptions").read_text(encoding="utf-8")
+    allrun = (output_dir / "Allrun").read_text(encoding="utf-8")
+
+    assert report.can_run
+    assert "system/fvOptions" in report.files_written
+    assert "system/topoSetDict" in report.files_written
+    assert "MRF1RotorDiskCylinder" in snappy
+    assert "cellZone propFRZone;" in snappy
+    assert "source  cylinderToCell;" in topo_set
+    assert "type            rotorDisk;" in fv_options
+    assert "selectionMode   cellZone;" in fv_options
+    assert "cellZone        propFRZone;" in fv_options
+    assert "rpm             9549.3" in fv_options
+    assert "runApplication topoSet" in allrun
+
+
+def test_case_writer_accepts_per_rotor_mrf_omegas(tmp_path: Path) -> None:
+    output_dir = tmp_path / "mrf_differential_case"
+    spec = build_case_spec(
+        case_name="mrf_differential_case",
+        geometry=build_legacy_box_geometry(),
+        velocity_mps=0.0,
+        flow_regime="steady_incompressible_motion_proxy_mrf",
+        rotor_model="mrf",
+        mrf_omega_by_patch_rad_s={
+            "propeller_fl": -940.0,
+            "propeller_fr": 1060.0,
+            "propeller_bl": 1060.0,
+            "propeller_br": -940.0,
+        },
+    )
+
+    write_openfoam_case(spec, output_dir)
+
+    mrf = (output_dir / "constant/MRFProperties").read_text(encoding="utf-8")
+    assert "omega          1060;" in mrf
+    assert "omega          -940;" in mrf
+
+
 def test_case_writer_transforms_stl_when_attitude_is_nonzero(tmp_path: Path) -> None:
     geometry_file = tmp_path / "drone.stl"
     _write_binary_stl(geometry_file)
