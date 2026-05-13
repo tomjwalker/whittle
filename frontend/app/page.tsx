@@ -4,12 +4,15 @@ import { useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
+  ChevronDown,
+  ChevronUp,
   CircleHelp,
   CheckCircle2,
   FileCode2,
   ListChecks,
   Send,
   Terminal,
+  Trash2,
   Zap
 } from "lucide-react";
 
@@ -97,6 +100,7 @@ export default function Home() {
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [runLines, setRunLines] = useState<string[]>([]);
   const [openfoamRunning, setOpenfoamRunning] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const spec = response?.scenario_plan?.spec ?? null;
@@ -261,6 +265,7 @@ export default function Home() {
     const activeCaseName = String(spec?.case_name ?? (caseName || "ui_planned_case"));
     setRunStatus("Running OpenFOAM in WSL...");
     setRunLines([]);
+    setTerminalOpen(true);
     setOpenfoamRunning(true);
     try {
       const res = await fetch(`${API_BASE}/api/openfoam/run/stream`, {
@@ -289,6 +294,13 @@ export default function Home() {
       if (buffer.trim()) {
         handleRunLine(buffer);
       }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRunStatus(`Run stream failed: ${message}`);
+      setRunLines((prev) => [
+        ...prev,
+        `run_failed: The OpenFOAM run stream ended unexpectedly: ${message}`
+      ]);
     } finally {
       setOpenfoamRunning(false);
     }
@@ -296,7 +308,12 @@ export default function Home() {
 
   function handleRunLine(line: string) {
     if (!line.trim()) return;
-    const event = JSON.parse(line) as { type: string; message: string };
+    let event: { type: string; message: string };
+    try {
+      event = JSON.parse(line) as { type: string; message: string };
+    } catch {
+      event = { type: "line", message: line };
+    }
     if (["run_start", "step_start", "step_done", "target", "done"].includes(event.type)) {
       setRunStatus(event.message);
     }
@@ -588,10 +605,41 @@ export default function Home() {
           <p className="small-note">
             {writeStatus ?? "Files are written under outputs/agent_cases after review."}
           </p>
-          {runStatus ? <p className="small-note">{runStatus}</p> : null}
-          {runLines.length ? (
-            <pre className="run-log">{runLines.slice(-80).join("\n")}</pre>
-          ) : null}
+          <section className={`run-terminal ${terminalOpen ? "open" : ""}`}>
+            <div className="run-terminal-header">
+              <button
+                className="terminal-toggle"
+                type="button"
+                onClick={() => setTerminalOpen((value) => !value)}
+                disabled={!runStatus && !runLines.length}
+              >
+                <Terminal size={15} />
+                OpenFOAM terminal
+                {terminalOpen ? <ChevronDown size={15} /> : <ChevronUp size={15} />}
+              </button>
+              <button
+                className="icon-button terminal-clear"
+                type="button"
+                onClick={() => {
+                  setRunLines([]);
+                  setRunStatus(null);
+                }}
+                disabled={!runStatus && !runLines.length}
+                aria-label="Clear terminal"
+                title="Clear terminal"
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+            {runStatus ? <p className="terminal-status">{runStatus}</p> : null}
+            {terminalOpen ? (
+              <pre className="run-log" aria-live="polite">
+                {runLines.length
+                  ? runLines.slice(-180).join("\n")
+                  : "No OpenFOAM run output yet."}
+              </pre>
+            ) : null}
+          </section>
         </div>
       </aside>
     </main>

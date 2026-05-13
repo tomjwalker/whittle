@@ -142,7 +142,14 @@ def create_app() -> FastAPI:
         )
 
         async def iterator() -> AsyncIterator[bytes]:
-            async for event in stream_wsl_openfoam_run(config):
+            try:
+                async for event in stream_wsl_openfoam_run(config):
+                    yield (json.dumps(event) + "\n").encode("utf-8")
+            except Exception as exc:
+                event = {
+                    "type": "run_failed",
+                    "message": f"OpenFOAM runner failed before completion: {type(exc).__name__}: {exc}",
+                }
                 yield (json.dumps(event) + "\n").encode("utf-8")
 
         return StreamingResponse(iterator(), media_type="application/x-ndjson")

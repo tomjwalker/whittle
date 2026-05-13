@@ -539,10 +539,69 @@ pre {
   background: rgba(24, 24, 20, 0.96);
 }
 
+.run-terminal {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.run-terminal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminal-toggle {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  border: 1px solid var(--line-soft);
+  background: rgba(15, 21, 18, 0.62);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.terminal-toggle:hover:not(:disabled),
+.terminal-clear:hover:not(:disabled) {
+  border-color: var(--cyan);
+  color: var(--text);
+}
+
+.terminal-toggle:disabled,
+.terminal-clear:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.terminal-clear {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  background: rgba(15, 21, 18, 0.62);
+  color: var(--muted);
+}
+
+.terminal-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .run-log {
-  max-height: 180px;
+  width: 100%;
+  max-height: min(46svh, 520px);
   border-color: rgba(127, 199, 194, 0.2);
   color: #cfe6dd;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .small-note {

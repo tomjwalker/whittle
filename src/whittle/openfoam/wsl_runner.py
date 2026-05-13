@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import shlex
+import subprocess
+import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,28 +71,52 @@ async def stream_wsl_openfoam_run(config: OpenFOAMRunConfig) -> AsyncIterator[di
     script = build_wsl_openfoam_script(config)
     yield {"type": "run_start", "message": f"Starting OpenFOAM run for {config.case_name}."}
 
-    process = await asyncio.create_subprocess_exec(
-        "wsl",
-        "-d",
-        config.distro,
-        "bash",
-        "-s",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-    assert process.stdin is not None
-    process.stdin.write(script.encode("utf-8"))
-    await process.stdin.drain()
-    process.stdin.close()
-    assert process.stdout is not None
-    async for raw_line in process.stdout:
-        line = raw_line.decode("utf-8", errors="replace").rstrip()
-        yield _event_for_line(line)
+    queue: asyncio.Queue[dict[str, str] | None] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
 
-    return_code = await process.wait()
-    status = "run_complete" if return_code == 0 else "run_failed"
-    yield {"type": status, "message": f"OpenFOAM exited with code {return_code}."}
+    def emit(event: dict[str, str] | None) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, event)
+
+    def run_process() -> None:
+        try:
+            process = subprocess.Popen(
+                ["wsl", "-d", config.distro, "bash", "-s"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            assert process.stdin is not None
+            process.stdin.write(script.encode("utf-8"))
+            process.stdin.close()
+            assert process.stdout is not None
+            for raw_line in process.stdout:
+                line = raw_line.decode("utf-8", errors="replace").rstrip()
+                emit(_event_for_line(line))
+            return_code = process.wait()
+            status = "run_complete" if return_code == 0 else "run_failed"
+            emit({"type": status, "message": f"OpenFOAM exited with code {return_code}."})
+        except Exception as exc:
+            emit(
+                {
+                    "type": "run_failed",
+                    "message": f"OpenFOAM runner failed before completion: {type(exc).__name__}: {exc}",
+                }
+            )
+        finally:
+            emit(None)
+
+    thread = threading.Thread(
+        target=run_process,
+        name=f"whittle-openfoam-{config.case_name}",
+        daemon=True,
+    )
+    thread.start()
+
+    while True:
+        event = await queue.get()
+        if event is None:
+            break
+        yield event
 
 
 def _openfoam_step(command: str) -> str:
