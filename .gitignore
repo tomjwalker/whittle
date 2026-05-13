@@ -29,6 +29,7 @@ Thumbs.db
 # Local temp
 tmp/
 .tmp/
+.codex/
 
 # Generated cases and reports
 outputs/*

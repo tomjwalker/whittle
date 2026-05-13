@@ -43,11 +43,19 @@ input {
   min-height: 100svh;
 }
 
+.app-shell.inspector-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .workspace {
   display: flex;
   min-height: 100svh;
   flex-direction: column;
   border-right: 1px solid var(--line);
+}
+
+.app-shell.inspector-collapsed .workspace {
+  border-right: 0;
 }
 
 .topbar {
@@ -196,6 +204,16 @@ input {
   color: var(--text);
 }
 
+.rail-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  background: rgba(32, 32, 23, 0.88);
+  color: var(--muted);
+}
+
 .composer {
   position: sticky;
   bottom: 0;
@@ -265,6 +283,7 @@ textarea {
 }
 
 .inspector {
+  position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-height: 100svh;
@@ -272,7 +291,9 @@ textarea {
 }
 
 .inspector-header {
-  padding: 22px 20px 16px;
+  display: grid;
+  gap: 12px;
+  padding: 18px 20px 14px;
   border-bottom: 1px solid var(--line-soft);
 }
 
@@ -281,13 +302,34 @@ textarea {
   margin: 0;
 }
 
+.inspector-title-row,
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .inspector-header h2 {
   font-size: 18px;
 }
 
+.state-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.state-summary span {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
 .inspector-scroll {
   overflow-y: auto;
-  padding: 18px 20px 110px;
+  padding: 12px 20px 110px;
 }
 
 .section {
@@ -375,6 +417,87 @@ textarea {
   padding-top: 6px;
 }
 
+.section.nested {
+  padding: 10px 0 4px;
+  border-bottom: 0;
+}
+
+.step-section {
+  padding-top: 12px;
+}
+
+.schema-section {
+  gap: 12px;
+}
+
+.schema-source {
+  color: var(--faint);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.schema-list {
+  display: grid;
+  gap: 7px;
+}
+
+.schema-row {
+  display: grid;
+  grid-template-columns: minmax(118px, 0.85fr) minmax(0, 1fr) 54px;
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  padding: 7px 8px;
+  border: 1px solid var(--line-soft);
+  background: rgba(15, 21, 18, 0.38);
+}
+
+.schema-row code {
+  color: #d9e7dd;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.schema-row strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.schema-row span {
+  justify-self: end;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.schema-row.set {
+  border-color: rgba(129, 199, 132, 0.28);
+}
+
+.schema-row.set span {
+  color: var(--ok);
+}
+
+.schema-row.draft {
+  border-color: rgba(227, 179, 75, 0.28);
+}
+
+.schema-row.draft span {
+  color: var(--accent-strong);
+}
+
+.schema-row.missing {
+  border-color: rgba(229, 115, 115, 0.24);
+}
+
+.schema-row.missing span {
+  color: var(--warn);
+}
+
 .trace-rail {
   display: flex;
   flex-wrap: wrap;
@@ -390,6 +513,25 @@ textarea {
   background: rgba(16, 44, 43, 0.52);
   color: #bfe7e3;
   font-size: 12px;
+}
+
+.fold-section {
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.fold-section summary {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.fold-section[open] summary {
+  color: var(--text);
 }
 
 .inspector-copy {
@@ -507,18 +649,6 @@ textarea {
   line-height: 1.45;
 }
 
-.raw-contract summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.raw-contract[open] summary {
-  margin-bottom: 10px;
-}
-
 pre {
   max-height: 360px;
   overflow: auto;
@@ -537,6 +667,20 @@ pre {
   padding: 16px 20px 20px;
   border-top: 1px solid var(--line-soft);
   background: rgba(24, 24, 20, 0.96);
+}
+
+.write-strip.terminal-focus {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  align-content: start;
+  padding: 18px 20px;
+  background: rgba(14, 17, 16, 0.98);
+}
+
+.write-strip.terminal-focus .command-button,
+.write-strip.terminal-focus > .small-note {
+  display: none;
 }
 
 .run-terminal {
@@ -602,6 +746,14 @@ pre {
   color: #cfe6dd;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.run-log.expanded {
+  max-height: min(70svh, 760px);
+}
+
+.write-strip.terminal-focus .run-log {
+  max-height: calc(100svh - 142px);
 }
 
 .small-note {

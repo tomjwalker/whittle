@@ -9,7 +9,10 @@ import {
   CircleHelp,
   CheckCircle2,
   FileCode2,
-  ListChecks,
+  Maximize2,
+  Minimize2,
+  PanelRightClose,
+  PanelRightOpen,
   Send,
   Terminal,
   Trash2,
@@ -78,6 +81,13 @@ type ConversationMessage = {
   content: string;
 };
 
+type SchemaRow = {
+  field: string;
+  value: string;
+  state: "set" | "draft" | "missing";
+  source: string;
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_WHITTLE_API_URL ?? "http://127.0.0.1:8000";
 
 const STARTERS = [
@@ -101,6 +111,9 @@ export default function Home() {
   const [runLines, setRunLines] = useState<string[]>([]);
   const [openfoamRunning, setOpenfoamRunning] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalExpanded, setTerminalExpanded] = useState(false);
+  const [terminalFocus, setTerminalFocus] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
 
   const spec = response?.scenario_plan?.spec ?? null;
@@ -113,18 +126,60 @@ export default function Home() {
       ? "warn"
       : "";
 
-  const specSummary = useMemo(() => {
-    if (!spec) return [];
+  const schemaRows = useMemo<SchemaRow[]>(() => {
+    const specRecord = spec as Record<string, unknown> | null;
+    const geometry = specRecord?.geometry as Record<string, unknown> | undefined;
+    const mrfZones = specRecord?.mrf_zones as unknown[] | undefined;
+    const rotorDiskSources = specRecord?.rotor_disk_sources as unknown[] | undefined;
+    const missing = response?.scenario_plan?.missing_information ?? [];
+    const attitude = specRecord
+      ? `${formatSchemaNumber(specRecord.roll_angle_deg)} / ${formatSchemaNumber(
+          specRecord.pitch_angle_deg
+        )} / ${formatSchemaNumber(specRecord.yaw_angle_deg)} deg`
+      : intent
+        ? `${formatSchemaNumber(intent.requested_roll_deg)} / ${formatSchemaNumber(
+            intent.requested_pitch_deg
+          )} / ${formatSchemaNumber(intent.requested_yaw_deg)} deg`
+        : "unset";
+
+    const rotorSourceCount = (mrfZones?.length ?? 0) + (rotorDiskSources?.length ?? 0);
     return [
-      ["Case", String(spec.case_name ?? "unknown")],
-      ["Velocity", `${String(spec.reference_velocity_mps ?? "?")} m/s`],
-      ["Rotor model", String(spec.rotor_model ?? "none")],
-      ["Roll", `${String(spec.roll_angle_deg ?? 0)} deg`],
-      ["Pitch", `${String(spec.pitch_angle_deg ?? 0)} deg`],
-      ["Yaw", `${String(spec.yaw_angle_deg ?? 0)} deg`],
-      ["Solver", String(spec.solver_family ?? "simpleFoam")]
+      schemaRow("case_name", specRecord?.case_name ?? caseName, Boolean(specRecord), "draft"),
+      schemaRow("geometry", geometry?.name, Boolean(geometry), "missing"),
+      schemaRow(
+        "reference_velocity_mps",
+        specRecord?.reference_velocity_mps ?? intent?.requested_velocity_mps,
+        specRecord?.reference_velocity_mps !== undefined,
+        intent?.requested_velocity_mps !== undefined ? "draft" : "missing",
+        "m/s"
+      ),
+      schemaRow(
+        "rotor_model",
+        specRecord?.rotor_model ?? intent?.rotor_strategy,
+        specRecord?.rotor_model !== undefined,
+        intent?.rotor_strategy ? "draft" : "missing"
+      ),
+      schemaRow("solver_family", specRecord?.solver_family ?? "simpleFoam", Boolean(specRecord), "draft"),
+      {
+        field: "attitude_rpy",
+        value: attitude,
+        state: specRecord ? "set" : intent ? "draft" : "missing",
+        source: specRecord ? "SimulationCaseSpec" : intent ? "ScenarioIntent" : "waiting",
+      },
+      {
+        field: "rotor_sources",
+        value: rotorSourceCount ? `${rotorSourceCount} configured` : intent?.rotor_strategy ?? "unset",
+        state: rotorSourceCount ? "set" : intent?.rotor_strategy ? "draft" : "missing",
+        source: rotorSourceCount ? "SimulationCaseSpec" : intent?.rotor_strategy ? "ScenarioIntent" : "waiting",
+      },
+      {
+        field: "missing_information",
+        value: missing.length ? `${missing.length} open` : "none",
+        state: missing.length ? "missing" : specRecord || intent ? "set" : "draft",
+        source: missing.length ? "planner" : "validator",
+      },
     ];
-  }, [spec]);
+  }, [caseName, intent, response?.scenario_plan?.missing_information, spec]);
 
   async function submit(message = prompt) {
     const trimmed = message.trim();
@@ -266,6 +321,8 @@ export default function Home() {
     setRunStatus("Running OpenFOAM in WSL...");
     setRunLines([]);
     setTerminalOpen(true);
+    setTerminalExpanded(true);
+    setTerminalFocus(true);
     setOpenfoamRunning(true);
     try {
       const res = await fetch(`${API_BASE}/api/openfoam/run/stream`, {
@@ -324,7 +381,7 @@ export default function Home() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${inspectorOpen ? "" : "inspector-collapsed"}`}>
       <section className="workspace">
         <header className="topbar">
           <div className="brand">
@@ -334,6 +391,17 @@ export default function Home() {
           <div className="meta-row">
             <Terminal size={15} />
             <span>{response?.model ?? "openai-responses:gpt-5.4-mini"}</span>
+            {!inspectorOpen ? (
+              <button
+                className="icon-button rail-toggle"
+                type="button"
+                onClick={() => setInspectorOpen(true)}
+                aria-label="Show planning state"
+                title="Show planning state"
+              >
+                <PanelRightOpen size={16} />
+              </button>
+            ) : null}
           </div>
         </header>
 
@@ -397,6 +465,12 @@ export default function Home() {
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               onInput={(event) => setPrompt(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  submit();
+                }
+              }}
               placeholder="Describe the CFD case..."
             />
             <button className="command-button" type="submit" disabled={loading || !prompt.trim()}>
@@ -425,73 +499,37 @@ export default function Home() {
         </form>
       </section>
 
-      <aside className="inspector">
+      {inspectorOpen ? <aside className="inspector">
         <div className="inspector-header">
-          <h2>Planning State</h2>
-          <p className={`status ${statusClass}`}>
-            {statusClass === "ok" ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-            {response?.status ?? "idle"}
-          </p>
-          <p className="phase-label">{response?.phase ?? "waiting_for_request"}</p>
+          <div className="inspector-title-row">
+            <h2>Planning State</h2>
+            <button
+              className="icon-button rail-toggle"
+              type="button"
+              onClick={() => setInspectorOpen(false)}
+              aria-label="Collapse planning state"
+              title="Collapse planning state"
+            >
+              <PanelRightClose size={16} />
+            </button>
+          </div>
+          <div className="state-summary">
+            <p className={`status ${statusClass}`}>
+              {statusClass === "ok" ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+              {response?.status ?? "idle"}
+            </p>
+            <span>{response?.phase ?? "waiting_for_request"}</span>
+          </div>
+          <TraceRail trace={trace} />
         </div>
 
         <div className="inspector-scroll">
-          <section className="section compact">
-            <h3>Agent Actions</h3>
-            <TraceRail trace={trace} />
-          </section>
-
-          <section className="section">
-            <h3>Intent</h3>
-            {intent ? (
-              <>
-                <div className="intent-header">
-                  <span className={`intent-state ${intentStateClass(intent.state)}`}>
-                    {labelIntentState(intent.state)}
-                  </span>
-                  <span className="confidence">
-                    {Math.round((intent.confidence ?? 0) * 100)}% confidence
-                  </span>
-                </div>
-                <div className="intent-grid">
-                  <IntentValue label="Objective" value={intent.objective} />
-                  <IntentValue label="Rotor strategy" value={intent.rotor_strategy} />
-                  <IntentValue label="Environment" value={intent.environment} />
-                  <IntentValue
-                    label="Velocity"
-                    value={formatOptionalNumber(intent.requested_velocity_mps, "m/s")}
-                  />
-                  <IntentValue
-                    label="Yaw rate"
-                    value={formatOptionalNumber(intent.requested_yaw_rate_deg_s, "deg/s")}
-                  />
-                  <IntentValue
-                    label="Omega"
-                    value={formatOptionalNumber(intent.requested_mrf_omega_rad_s, "rad/s")}
-                  />
-                </div>
-                {intent.recommended_next_step ? (
-                  <p className="inspector-copy">{intent.recommended_next_step}</p>
-                ) : null}
-              </>
-            ) : (
-              <p className="small-note">
-                No intent draft yet. The first agent pass will infer the user objective before
-                producing a hard case contract.
-              </p>
-            )}
-          </section>
-
-          <section className="section">
+          <section className="section step-section">
             <h3>Current Step</h3>
             <p className="inspector-copy">
               {response?.summary ??
                 "Ask for a drone CFD scenario and I will help turn it into a typed case."}
             </p>
-            <div className="kv">
-              <span>Source</span>
-              <strong>{response?.source ?? "not_started"}</strong>
-            </div>
             {response?.next_actions?.length ? (
               <div className="suggestion-stack">
                 {response.next_actions.map((action) => (
@@ -510,35 +548,75 @@ export default function Home() {
             ) : null}
           </section>
 
-          <section className="section">
-            <h3>Trace</h3>
-            <div className="trace-list">
-              {trace.length ? trace.map((item, index) => (
-                <div className="trace-item" key={`${item.event_type}-${index}`}>
-                  <span className="trace-dot" />
-                  <span><strong>{item.event_type}</strong><br />{item.message}</span>
+          <section className="section schema-section">
+            <div className="section-title-row">
+              <h3>SimulationCaseSpec</h3>
+              <span className="schema-source">{response?.source ?? "not_started"}</span>
+            </div>
+            <div className="schema-list">
+              {schemaRows.map((row) => (
+                <div className={`schema-row ${row.state}`} key={row.field}>
+                  <code>{row.field}</code>
+                  <strong>{row.value}</strong>
+                  <span>{row.state}</span>
                 </div>
-              )) : <p className="small-note">No run yet.</p>}
+              ))}
             </div>
           </section>
 
-          <section className="section">
-            <h3>Spec</h3>
-            {specSummary.length ? specSummary.map(([label, value]) => (
-              <div className="kv" key={label}>
-                <span>{label}</span>
-                <strong>{value}</strong>
+          <details className="fold-section">
+            <summary>Intent draft</summary>
+            <section className="section nested">
+              {intent ? (
+                <>
+                  <div className="intent-header">
+                    <span className={`intent-state ${intentStateClass(intent.state)}`}>
+                      {labelIntentState(intent.state)}
+                    </span>
+                    <span className="confidence">
+                      {Math.round((intent.confidence ?? 0) * 100)}% confidence
+                    </span>
+                  </div>
+                  <div className="intent-grid">
+                    <IntentValue label="Objective" value={intent.objective} />
+                    <IntentValue label="Rotor strategy" value={intent.rotor_strategy} />
+                    <IntentValue label="Environment" value={intent.environment} />
+                    <IntentValue
+                      label="Velocity"
+                      value={formatOptionalNumber(intent.requested_velocity_mps, "m/s")}
+                    />
+                    <IntentValue
+                      label="Yaw rate"
+                      value={formatOptionalNumber(intent.requested_yaw_rate_deg_s, "deg/s")}
+                    />
+                    <IntentValue
+                      label="Omega"
+                      value={formatOptionalNumber(intent.requested_mrf_omega_rad_s, "rad/s")}
+                    />
+                  </div>
+                  {intent.recommended_next_step ? (
+                    <p className="inspector-copy">{intent.recommended_next_step}</p>
+                  ) : null}
+                </>
+              ) : (
+                <p className="small-note">No intent draft yet.</p>
+              )}
+            </section>
+          </details>
+
+          <details className="fold-section">
+            <summary>Trace and checks</summary>
+            <section className="section nested">
+              <div className="trace-list">
+                {trace.length ? trace.map((item, index) => (
+                  <div className="trace-item" key={`${item.event_type}-${index}`}>
+                    <span className="trace-dot" />
+                    <span><strong>{item.event_type}</strong><br />{item.message}</span>
+                  </div>
+                )) : <p className="small-note">No run yet.</p>}
               </div>
-            )) : (
-              <div className="empty-spec">
-                <ListChecks size={16} />
-                <span>
-                  No writeable typed spec yet. The agent is still scoping, coaching, or
-                  asking for missing inputs.
-                </span>
-              </div>
-            )}
-          </section>
+            </section>
+          </details>
 
           {response?.scenario_plan?.clarifying_questions?.length ? (
             <section className="section">
@@ -562,33 +640,33 @@ export default function Home() {
             </section>
           ) : null}
 
-          <section className="section">
-            <h3>Assumptions</h3>
-            {response?.scenario_plan?.assumptions?.length ? (
-              <ul className="list">
-                {response.scenario_plan.assumptions.map((item) => <li key={item}>{item}</li>)}
-              </ul>
-            ) : <p className="small-note">None recorded.</p>}
-          </section>
+          <details className="fold-section">
+            <summary>Assumptions and warnings</summary>
+            <section className="section nested">
+              <h3>Assumptions</h3>
+              {response?.scenario_plan?.assumptions?.length ? (
+                <ul className="list">
+                  {response.scenario_plan.assumptions.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              ) : <p className="small-note">None recorded.</p>}
+              <h3>Warnings</h3>
+              {response?.scenario_plan?.warnings?.length ? (
+                <ul className="list">
+                  {response.scenario_plan.warnings.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              ) : <p className="small-note">None.</p>}
+            </section>
+          </details>
 
-          <section className="section">
-            <h3>Warnings</h3>
-            {response?.scenario_plan?.warnings?.length ? (
-              <ul className="list">
-                {response.scenario_plan.warnings.map((item) => <li key={item}>{item}</li>)}
-              </ul>
-            ) : <p className="small-note">None.</p>}
-          </section>
-
-          <section className="section">
-            <details className="raw-contract">
-              <summary>Raw Contract</summary>
+          <details className="fold-section raw-contract">
+            <summary>Raw Contract</summary>
+            <section className="section nested">
               <pre>{JSON.stringify(response?.scenario_plan ?? {}, null, 2)}</pre>
-            </details>
-          </section>
+            </section>
+          </details>
         </div>
 
-        <div className="write-strip">
+        <div className={`write-strip ${terminalFocus ? "terminal-focus" : ""}`}>
           <button className="command-button secondary" type="button" disabled={!canWrite} onClick={writeCase}>
             <FileCode2 size={17} />
             Write case
@@ -630,10 +708,23 @@ export default function Home() {
               >
                 <Trash2 size={15} />
               </button>
+              <button
+                className="icon-button terminal-clear"
+                type="button"
+                onClick={() => {
+                  setTerminalExpanded((value) => !value);
+                  setTerminalFocus((value) => !value);
+                }}
+                disabled={!runStatus && !runLines.length}
+                aria-label={terminalExpanded ? "Shrink terminal" : "Expand terminal"}
+                title={terminalExpanded ? "Shrink terminal" : "Expand terminal"}
+              >
+                {terminalExpanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+              </button>
             </div>
             {runStatus ? <p className="terminal-status">{runStatus}</p> : null}
             {terminalOpen ? (
-              <pre className="run-log" aria-live="polite">
+              <pre className={`run-log ${terminalExpanded ? "expanded" : ""}`} aria-live="polite">
                 {runLines.length
                   ? runLines.slice(-180).join("\n")
                   : "No OpenFOAM run output yet."}
@@ -641,7 +732,7 @@ export default function Home() {
             ) : null}
           </section>
         </div>
-      </aside>
+      </aside> : null}
     </main>
   );
 }
@@ -709,6 +800,30 @@ function IntentValue({ label, value }: { label: string; value: string }) {
 function formatOptionalNumber(value: number | null | undefined, unit: string) {
   if (value === null || value === undefined) return "unset";
   return `${value} ${unit}`;
+}
+
+function formatSchemaNumber(value: unknown) {
+  if (typeof value !== "number") return "unset";
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
+function schemaRow(
+  field: string,
+  rawValue: unknown,
+  isSet: boolean,
+  fallback: "draft" | "missing",
+  unit?: string
+): SchemaRow {
+  const hasValue = rawValue !== null && rawValue !== undefined && rawValue !== "";
+  const value = hasValue
+    ? `${String(rawValue)}${unit ? ` ${unit}` : ""}`
+    : "unset";
+  return {
+    field,
+    value,
+    state: isSet ? "set" : hasValue ? fallback : "missing",
+    source: isSet ? "SimulationCaseSpec" : hasValue ? "ScenarioIntent" : "waiting",
+  };
 }
 
 function intentStateClass(state: string) {
