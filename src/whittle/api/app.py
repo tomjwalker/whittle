@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -65,7 +66,6 @@ class ApiHealth(BaseModel):
     app: str = "whittle"
     default_model: str = DEFAULT_AGENT_MODEL
     default_thinking: str = DEFAULT_AGENT_THINKING
-    has_openai_api_key: bool = Field(default_factory=lambda: bool(os.getenv("OPENAI_API_KEY")))
     logfire_enabled: bool = Field(default_factory=logfire_enabled)
 
 
@@ -87,41 +87,46 @@ def create_app() -> FastAPI:
         return ApiHealth()
 
     @app.get("/api/physics-envelope")
-    async def physics_envelope() -> dict[str, Any]:
+    async def physics_envelope(request: Request) -> dict[str, Any]:
+        _require_local_client(request)
         return DEFAULT_PHYSICS_ENVELOPE.model_dump(mode="json")
 
     @app.post("/api/plan", response_model=PlanningAgentResponse)
-    async def plan(request: PlanRequest) -> PlanningAgentResponse:
+    async def plan(request: Request, body: PlanRequest) -> PlanningAgentResponse:
+        _require_local_client(request)
         return await run_planning_agent(
-            request.message,
-            case_name=request.case_name,
-            model=request.model,
-            thinking=request.thinking,
-            deterministic=request.deterministic,
-            conversation_history=request.conversation_history,
-            previous_plan=request.previous_plan,
+            body.message,
+            case_name=body.case_name,
+            model=body.model,
+            thinking=body.thinking,
+            deterministic=body.deterministic,
+            conversation_history=body.conversation_history,
+            previous_plan=body.previous_plan,
         )
 
     @app.post("/api/plan/stream")
-    async def plan_stream(request: PlanRequest) -> StreamingResponse:
+    async def plan_stream(request: Request, body: PlanRequest) -> StreamingResponse:
+        _require_local_client(request)
+
         async def iterator() -> AsyncIterator[bytes]:
             async for event in stream_planning_agent(
-                request.message,
-                case_name=request.case_name,
-                model=request.model,
-                thinking=request.thinking,
-                deterministic=request.deterministic,
-                conversation_history=request.conversation_history,
-                previous_plan=request.previous_plan,
+                body.message,
+                case_name=body.case_name,
+                model=body.model,
+                thinking=body.thinking,
+                deterministic=body.deterministic,
+                conversation_history=body.conversation_history,
+                previous_plan=body.previous_plan,
             ):
                 yield (json.dumps(event) + "\n").encode("utf-8")
 
         return StreamingResponse(iterator(), media_type="application/x-ndjson")
 
     @app.post("/api/write-case", response_model=CaseSetupReport)
-    async def write_case(request: WriteCaseRequest) -> CaseSetupReport:
-        output_dir = _case_output_dir(request.output_root, request.spec.case_name)
-        report = write_openfoam_case(request.spec, output_dir)
+    async def write_case(request: Request, body: WriteCaseRequest) -> CaseSetupReport:
+        _require_local_client(request)
+        output_dir = _case_output_dir(body.output_root, body.spec.case_name)
+        report = write_openfoam_case(body.spec, output_dir)
         report.trace_events.append(
             TraceEvent(
                 event_type="FilesWrittenByApi",
@@ -132,13 +137,14 @@ def create_app() -> FastAPI:
         return report
 
     @app.post("/api/openfoam/run/stream")
-    async def openfoam_run_stream(request: RunOpenFOAMRequest) -> StreamingResponse:
-        case_dir = _case_output_dir(request.output_root, request.case_name)
+    async def openfoam_run_stream(request: Request, body: RunOpenFOAMRequest) -> StreamingResponse:
+        _require_local_client(request)
+        case_dir = _case_output_dir(body.output_root, body.case_name)
         config = OpenFOAMRunConfig(
             case_dir=case_dir,
-            case_name=request.case_name,
-            distro=request.distro,
-            bashrc=request.bashrc,
+            case_name=body.case_name,
+            distro=body.distro,
+            bashrc=body.bashrc,
         )
 
         async def iterator() -> AsyncIterator[bytes]:
@@ -148,7 +154,10 @@ def create_app() -> FastAPI:
             except Exception as exc:
                 event = {
                     "type": "run_failed",
-                    "message": f"OpenFOAM runner failed before completion: {type(exc).__name__}: {exc}",
+                    "message": (
+                        "OpenFOAM runner failed before completion: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
                 }
                 yield (json.dumps(event) + "\n").encode("utf-8")
 
@@ -165,10 +174,44 @@ def _cors_origins() -> list[str]:
 
 
 def _case_output_dir(output_root: str, case_name: str) -> Path:
+    _validate_safe_path_fragment(output_root, "output_root")
+    _validate_case_name(case_name)
     root = Path(output_root)
     if root.is_absolute():
-        return root / case_name
-    return Path.cwd() / root / case_name
+        raise HTTPException(status_code=400, detail="output_root must be a relative path.")
+    output_dir = (Path.cwd() / root / case_name).resolve()
+    workspace = Path.cwd().resolve()
+    if output_dir != workspace and workspace not in output_dir.parents:
+        raise HTTPException(status_code=400, detail="Output path must stay inside the workspace.")
+    return output_dir
+
+
+def _validate_safe_path_fragment(value: str, field_name: str) -> None:
+    path = Path(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise HTTPException(status_code=400, detail=f"{field_name} must be a safe relative path.")
+
+
+def _validate_case_name(case_name: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", case_name):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "case_name must be 1-80 characters and use only letters, numbers, "
+                "dots, dashes, or underscores."
+            ),
+        )
+
+
+def _require_local_client(request: Request) -> None:
+    host = request.client.host if request.client else ""
+    if host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This local demo only allows API access from localhost."
+            ),
+        )
 
 
 app = create_app()

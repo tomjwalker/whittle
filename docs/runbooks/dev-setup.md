@@ -6,9 +6,9 @@ _Last updated: 2026-05-12_
 
 - Python 3.11+
 - `uv`
-- OpenFOAM v2012 in WSL for later solver runs
-- ParaView 5.13.2 for later post-processing
 - Node.js 20+ for the optional Next.js UI
+- OpenFOAM v2012 in WSL for optional solver runs
+- ParaView 5.13.2 for optional post-processing
 
 Observed local paths:
 
@@ -24,11 +24,13 @@ ParaView: C:\Program Files\ParaView 5.13.2\bin\paraview.exe
 - Never commit secrets or raw environment contents.
 - Backend agent settings live in `backend/.env.example`.
 - Frontend settings live in `frontend/.env.local.example`.
+- The OpenAI key is optional. Without it, the planning agent command and API
+  can use deterministic fallback mode for architecture review.
 
 For the model-backed planning agent:
 
 ```bash
-OPENAI_API_KEY=sk-...
+OPENAI_API_KEY=your_openai_api_key_here
 WHITTLE_AGENT_MODEL=openai-responses:gpt-5.4-mini
 WHITTLE_AGENT_THINKING=medium
 WHITTLE_LOGFIRE_ENABLED=false
@@ -134,6 +136,23 @@ npm run dev
 Open `http://localhost:3000`. The UI talks to
 `NEXT_PUBLIC_WHITTLE_API_URL`, defaulting to `http://127.0.0.1:8000`.
 
+## Public Demo Assets
+
+The committed `assets/legacy_box_quadcopter/triSurface` files are the split
+quadcopter STLs used by the current `--preset legacy-box` MRF, rotor-disk, and
+attitude-transform scenarios. They make the main quadcopter case family
+reproducible for a fresh clone.
+
+Higher-fidelity CAD remains local and ignored under `cad/` or `CAD/`. If shared
+separately, use a read-only link and tell users where to place the file, for
+example:
+
+```text
+cad/drone_model_hex.stl
+```
+
+Public-safe UI and ParaView screenshots live under `assets/screenshots/`.
+
 ## OpenFOAM Activation
 
 From PowerShell:
@@ -194,6 +213,9 @@ uv run whittle run-openfoam --case-dir outputs/legacy_box_rotor_disk_hover_t500 
 
 Later Whittle should gain a typed log parser for `checkMesh` and solver status.
 Until then, keep large logs local and ignored.
+
+The API is local-demo-only. Do not expose it to the public internet without
+adding authentication, rate limiting, and deployment sandboxing.
 
 ## Update Rule
 

@@ -99,7 +99,10 @@ async def stream_wsl_openfoam_run(config: OpenFOAMRunConfig) -> AsyncIterator[di
             emit(
                 {
                     "type": "run_failed",
-                    "message": f"OpenFOAM runner failed before completion: {type(exc).__name__}: {exc}",
+                    "message": (
+                        "OpenFOAM runner failed before completion: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
                 }
             )
         finally:

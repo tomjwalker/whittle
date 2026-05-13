@@ -1,14 +1,18 @@
 # Legacy Box Quadcopter Assets
 
-These STL files were copied from the prior local OpenFOAM case:
+This directory contains the split quadcopter STL geometry used by the
+`--preset legacy-box` workflow. These are the public out-of-the-box assets for
+the MRF, rotor-disk, and roll/pitch/yaw attitude cases.
+
+The original development geometry was copied from the prior local OpenFOAM
+case:
 
 ```text
 \\wsl$\Ubuntu-22.04\home\tjwalker\OpenFOAM\cases\BoxQuadcopterCase\constant\triSurface
 ```
 
-They are retained as a known-good local geometry set from last year's Isembard
-work. They are useful for Whittle V0 because they are already split into body
-and propeller surfaces and were referenced by a prior OpenFOAM case.
+They are retained because they are already split into body and propeller
+surfaces and were referenced by a prior OpenFOAM case.
 
 Included surfaces:
 
